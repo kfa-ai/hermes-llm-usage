@@ -1,0 +1,6 @@
+name: llm-usage
+version: 0.2.0
+description: >-
+  LLM plan windows / capacity for Hermes Desktop
+  (Claude Code, Grok, Codex, Venice). Account-level only.
+author: kfa-ai

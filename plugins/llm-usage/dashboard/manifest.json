@@ -1,0 +1,8 @@
+{
+  "name": "llm-usage",
+  "label": "LLM Usage",
+  "description": "LLM plan windows for Hermes Desktop (Claude Code, Grok, Codex, Venice)",
+  "icon": "Activity",
+  "version": "0.2.0",
+  "api": "plugin_api.py"
+}
