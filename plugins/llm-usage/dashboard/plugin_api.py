@@ -99,12 +99,15 @@ def _resolve_bin(name: str) -> str | None:
 
 
 def _workdir() -> Path:
-    candidates = [
-        Path.home() / "Projects" / "llm-usage-bar",
-        Path.home() / "Projects",
-        Path.home(),
-    ]
-    for path in candidates:
+    """Working directory for the throwaway CLI sessions.
+
+    Only used as the tmux session's cwd. `/usage` is account-level, so the
+    directory has no bearing on the reading — set HERMES_LLM_USAGE_WORKDIR if a
+    specific one is needed (e.g. a folder the CLI has already been trusted in).
+    """
+    override = os.environ.get("HERMES_LLM_USAGE_WORKDIR")
+    if override:
+        path = Path(override).expanduser()
         if path.is_dir():
             return path
     return Path.home()
@@ -291,9 +294,9 @@ def fetch_claude_cli_quota_windows() -> tuple[list[dict], str | None]:
                 session,
                 "-c",
                 workdir,
+                # No --model: /usage reports account-level windows regardless of
+                # the model, and pinning one fails for anyone without access to it.
                 claude_bin,
-                "--model",
-                "opus",
             ],
             check=False,
             capture_output=True,

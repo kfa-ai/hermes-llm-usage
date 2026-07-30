@@ -13,6 +13,18 @@ Successor to the macOS menubar app [`llm-usage-bar`](https://github.com/kfa-ai/l
 
 **Status:** private while we polish. Not public yet.
 
+**Planned rename:** this will be published as **`hermes-llm-usage-bar`**;
+`hermes-llm-usage` is an internal working name. The repo name is cosmetic, but
+decide deliberately whether the *plugin id* (`llm-usage`) changes with it — that
+id is load-bearing:
+
+- install paths — `$HERMES_HOME/{plugins,desktop-plugins}/llm-usage/`
+- the backend route — `/api/plugins/llm-usage/*`
+- the floating pane id, and the `floatingOpen` plugin-storage key
+
+Changing the id resets saved pane geometry and orphans the old install
+directories, so a rename wants an uninstall step rather than a second `install.sh`.
+
 ---
 
 ## Install
@@ -96,7 +108,16 @@ Each quota window carries `used_pct`, `reset_label` (raw provider wording) and
 `resets_at` (epoch seconds, `null` when unparseable). Codex supplies a real
 timestamp; Claude and Grok are scraped text run through `parse_reset_to_epoch`.
 
-Results cache ~5 minutes in memory + `~/.hermes/cache/llm-usage.json`.
+Results cache ~5 minutes in memory + `~/.hermes/cache/llm-usage.json`. Expiry
+serves the last good snapshot and refreshes behind it, so a poll never waits on
+the provider sweep (~15s).
+
+## Configuration
+
+| Variable | Default | Effect |
+|---|---|---|
+| `HERMES_LLM_USAGE_TTL_SEC` | `300` | Seconds between provider refreshes (min 30). Each sweep spawns tmux, the Claude/Grok CLIs, a Codex app-server and a Venice request — lower values mean real process churn. |
+| `HERMES_LLM_USAGE_WORKDIR` | `$HOME` | cwd for the throwaway CLI sessions. Only needed if the CLIs must run in a directory they've already been trusted in. |
 
 ---
 
