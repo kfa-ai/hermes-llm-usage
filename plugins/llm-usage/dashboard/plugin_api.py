@@ -12,23 +12,37 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import APIRouter
 
 router = APIRouter()
 
-_CACHE_TTL_SEC = 300
+def _ttl_from_env() -> int:
+    """Refresh cadence, in seconds. Override with HERMES_LLM_USAGE_TTL_SEC."""
+    raw = os.environ.get("HERMES_LLM_USAGE_TTL_SEC")
+    try:
+        return max(30, int(raw)) if raw else 300
+    except ValueError:
+        return 300
+
+
+# A collection spawns tmux + the Claude/Grok CLIs, a Codex app-server and a
+# Venice request, so it is far too slow to run inline on a request. Expiry
+# serves the last good snapshot and refreshes behind it instead.
+_CACHE_TTL_SEC = _ttl_from_env()
 _cache_lock = threading.Lock()
 _cache: dict | None = None
 _cache_at: float = 0.0
+_refreshing = False
 
 
 def _disk_cache_path() -> Path:
@@ -94,6 +108,105 @@ def _workdir() -> Path:
         if path.is_dir():
             return path
     return Path.home()
+
+
+# ── Reset times ──────────────────────────────────────────────────────────────
+#
+# Each provider states its reset in its own vernacular:
+#   Claude  "1:30pm" · "Jul 31 at 10am"      (raw CLI text)
+#   Grok    "August 3, 07:22"
+#   Codex   epoch seconds (resetsAt)
+# The UI needs one format, so resolve everything to `resets_at` epoch seconds
+# here and let the client format once. Unparseable text keeps its `reset_label`
+# so information is never lost — the UI falls back to showing it verbatim.
+
+_MONTHS = {
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+    "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+}
+_WEEKDAYS = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
+
+
+def parse_reset_to_epoch(text: str | None, now: datetime | None = None) -> float | None:
+    """Best-effort parse of a provider reset string into epoch seconds.
+
+    Handles month/day ("Jul 31 at 10am", "August 3, 07:22"), weekday
+    ("Fri at 10am"), and bare times ("1:30pm") which resolve to the next
+    occurrence. Returns None when nothing usable is found.
+    """
+    if not text or not isinstance(text, str):
+        return None
+    now = now or datetime.now().astimezone()
+
+    s = re.sub(r"\s*\([^)]*\)\s*$", "", text.strip())  # drop "(trailing note)"
+    s = re.sub(r"\s+[A-Z]{2,5}$", "", s).strip()  # drop trailing tz abbrev (AEST)
+    low = s.lower().replace(",", " ")
+
+    month = day = None
+    m = re.search(r"\b([a-z]{3})[a-z]*\.?\s+(\d{1,2})\b", low)
+    if m and m.group(1) in _MONTHS:
+        month, day = _MONTHS[m.group(1)], int(m.group(2))
+    else:  # "3 august"
+        m = re.search(r"\b(\d{1,2})\s+([a-z]{3})[a-z]*\b", low)
+        if m and m.group(2) in _MONTHS:
+            month, day = _MONTHS[m.group(2)], int(m.group(1))
+    if m and month:
+        low = (low[: m.start()] + " " + low[m.end() :]).strip()
+
+    weekday = None
+    if month is None:
+        wd = re.search(r"\b([a-z]{3})[a-z]*\b", low)
+        if wd and wd.group(1) in _WEEKDAYS:
+            weekday = _WEEKDAYS[wd.group(1)]
+
+    hour = minute = 0
+    have_time = False
+    t = re.search(r"\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b", low)
+    if t:
+        hour = int(t.group(1)) % 12
+        minute = int(t.group(2) or 0)
+        if t.group(3) == "pm":
+            hour += 12
+        have_time = True
+    else:
+        t = re.search(r"\b(\d{1,2}):(\d{2})\b", low)
+        if t:
+            hour, minute = int(t.group(1)), int(t.group(2))
+            have_time = True
+    if hour > 23 or minute > 59:
+        return None
+    if month is None and weekday is None and not have_time:
+        return None
+
+    try:
+        if month is not None and day is not None:
+            target = now.replace(
+                month=month, day=day, hour=hour, minute=minute, second=0, microsecond=0
+            )
+            # No year in the text — roll forward when it already passed.
+            if target < now - timedelta(days=1):
+                target = target.replace(year=target.year + 1)
+        elif weekday is not None:
+            target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            ahead = (weekday - target.weekday()) % 7
+            if ahead == 0 and target < now:
+                ahead = 7
+            target = target + timedelta(days=ahead)
+        else:
+            target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            if target < now:
+                target = target + timedelta(days=1)
+    except ValueError:
+        return None
+    return target.timestamp()
+
+
+def _with_reset_epoch(windows: list[dict]) -> list[dict]:
+    """Fill `resets_at` from `reset_label` for CLI-scraped providers."""
+    for window in windows:
+        if window.get("resets_at") is None:
+            window["resets_at"] = parse_reset_to_epoch(window.get("reset_label"))
+    return windows
 
 
 # ── Claude Code ──────────────────────────────────────────────────────────────
@@ -212,7 +325,7 @@ def fetch_claude_cli_quota_windows() -> tuple[list[dict], str | None]:
         windows = parse_claude_usage(captured.stdout or "")
         if not windows:
             return [], "parsed zero windows from Claude /usage (CLI UI may have changed)"
-        return windows, None
+        return _with_reset_epoch(windows), None
     finally:
         cleanup()
 
@@ -330,7 +443,7 @@ def fetch_grok_cli_quota_windows() -> tuple[list[dict], str | None]:
         windows = parse_grok_usage(captured.stdout or "")
         if not windows:
             return [], "parsed zero windows from Grok /usage (CLI UI may have changed)"
-        return windows, None
+        return _with_reset_epoch(windows), None
     finally:
         cleanup()
 
@@ -426,21 +539,26 @@ def fetch_codex_app_server_quota() -> tuple[list[dict], str | None]:
             else:
                 label, wid = "Codex limit", key
 
+            # Codex already gives a real timestamp — pass it through rather than
+            # baking it into a string the client would have to re-parse.
             reset_label = None
+            reset_epoch = None
             resets_at = window.get("resetsAt")
             if isinstance(resets_at, (int, float)):
                 try:
-                    reset_label = datetime.fromtimestamp(
-                        float(resets_at), tz=timezone.utc
-                    ).astimezone().strftime("%b %-d at %-I:%M %p %Z")
+                    moment = datetime.fromtimestamp(float(resets_at), tz=timezone.utc)
+                    reset_epoch = moment.timestamp()
+                    reset_label = moment.astimezone().strftime("%b %-d at %-I:%M %p")
                 except (OverflowError, OSError, ValueError):
                     reset_label = None
+                    reset_epoch = None
 
             windows.append(
                 {
                     "label": label,
                     "used_pct": max(0.0, min(100.0, float(used))),
                     "reset_label": reset_label,
+                    "resets_at": reset_epoch,
                     "id": wid,
                 }
             )
@@ -548,6 +666,122 @@ def _read_env_keys(names: list[str]) -> list[tuple[str, str]]:
         pass
     return found
 
+def _next_period_start(period: str, now: datetime | None = None) -> float | None:
+    """Epoch seconds at which the key's consumption period rolls over (UTC)."""
+    now = now or datetime.now(timezone.utc)
+    period = (period or "").upper()
+    if period == "DAY":
+        start = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+    elif period == "WEEK":
+        start = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(
+            days=7 - now.weekday()
+        )
+    elif period == "MONTH":
+        year, month = (now.year + 1, 1) if now.month == 12 else (now.year, now.month + 1)
+        start = now.replace(
+            year=year, month=month, day=1, hour=0, minute=0, second=0, microsecond=0
+        )
+    else:
+        return None
+    return start.timestamp()
+
+
+def fetch_venice_spend_window(api_key: str) -> tuple[list[dict], str | None]:
+    """The API key's consumption limit and period-to-date spend.
+
+    This is a genuine account spend window — a real USD cap, real usage against
+    it, and a real rollover. Distinct from the per-model RPM/TPM figures in
+    ``/api_keys/rate_limits``, which are throughput caps, not a balance, and must
+    never be presented as one.
+    """
+    auth_scheme = "Be" + "arer"
+    curl_config = 'header = "Authorization: ' + auth_scheme + " " + api_key + '"\n'
+    try:
+        child = subprocess.run(
+            [
+                "curl",
+                "-sS",
+                "--max-time",
+                "20",
+                "--config",
+                "-",
+                "--write-out",
+                "\n%{http_code}",
+                "https://api.venice.ai/api/v1/api_keys",
+            ],
+            input=curl_config,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError as exc:
+        return [], f"could not read Venice key limits: {exc}"
+    if child.returncode != 0:
+        return [], "Venice key-limit request failed"
+
+    body, _, status = (child.stdout or "").rpartition("\n")
+    if status.strip() != "200":
+        return [], f"Venice key limits unavailable (HTTP {status.strip()})"
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        return [], "Venice sent an unreadable key-limit response"
+
+    entries = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(entries, list):
+        return [], None
+
+    # Match on last6Chars so the right key is picked when several exist.
+    tail = api_key[-6:]
+    entry = next(
+        (e for e in entries if isinstance(e, dict) and e.get("last6Chars") == tail),
+        None,
+    )
+    if entry is None and len(entries) == 1 and isinstance(entries[0], dict):
+        entry = entries[0]
+    if not isinstance(entry, dict):
+        return [], None
+
+    limits = entry.get("consumptionLimits")
+    limit_usd = (limits or {}).get("usd") if isinstance(limits, dict) else None
+    if not isinstance(limit_usd, (int, float)) or limit_usd <= 0:
+        # No cap set on this key — nothing to show a percentage against.
+        return [], None
+
+    def _as_float(value):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    period_usage = entry.get("currentPeriodUsage")
+    spent = _as_float((period_usage or {}).get("usd")) if isinstance(period_usage, dict) else None
+    if spent is None:
+        spent = 0.0
+
+    period = str(entry.get("limitPeriod") or "").upper()
+    label = {"DAY": "Daily spend", "WEEK": "Weekly spend", "MONTH": "Monthly spend"}.get(
+        period, "Spend limit"
+    )
+    resets_at = _next_period_start(period)
+    return [
+        {
+            "label": label,
+            "used_pct": max(0.0, min(100.0, (spent / float(limit_usd)) * 100.0)),
+            "reset_label": None,
+            "resets_at": resets_at,
+            # Sub-cent spend needs the extra places, or "$0.005" reads as "$0.01"
+            # and overstates what has actually been used.
+            "detail": (
+                f"${spent:,.4f} of ${float(limit_usd):,.2f}"
+                if 0 < spent < 0.01
+                else f"${spent:,.2f} of ${float(limit_usd):,.2f}"
+            ),
+            "id": "spend_limit",
+        }
+    ], None
+
+
 def fetch_venice_capacity() -> tuple[list[dict], str | None, dict | None]:
     """Account balance from Venice billing API.
 
@@ -563,7 +797,7 @@ def fetch_venice_capacity() -> tuple[list[dict], str | None, dict | None]:
         if single:
             candidates = [("key", single)]
     if not candidates:
-        return [], "Venice API key not found (VENICE_API_KEY)", None
+        return [], "Add a Venice Admin key to ~/.hermes/.env as VENICE_API_KEY", None
 
     auth_scheme = "Be" + "arer"
     last_error: str | None = None
@@ -577,7 +811,7 @@ def fetch_venice_capacity() -> tuple[list[dict], str | None, dict | None]:
     def parse_balance_payload(payload: dict) -> tuple[list[dict], dict | None, str | None]:
         data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
         if not isinstance(data, dict):
-            return [], None, "Venice balance response not an object"
+            return [], None, "Venice sent an unreadable billing response"
         balances = data.get("balances") if isinstance(data.get("balances"), dict) else {}
         diem = _num(balances.get("diem"), data.get("diem"), payload.get("diem"))
         usd = _num(balances.get("usd"), data.get("usd"), payload.get("usd"))
@@ -587,7 +821,9 @@ def fetch_venice_capacity() -> tuple[list[dict], str | None, dict | None]:
             balances.get("diemEpochAllocation"),
         )
         if diem is None and usd is None:
-            return [], None, "Venice balance response missing DIEM/USD"
+            # A 200 with no balance fields almost always means an inference-only
+            # key: it can call models but can't read billing.
+            return [], None, "Venice returned no balance. Check the key has Admin scope."
 
         windows: list[dict] = []
         if diem is not None and epoch is not None and epoch > 0:
@@ -633,7 +869,7 @@ def fetch_venice_capacity() -> tuple[list[dict], str | None, dict | None]:
             ),
         }
         if not windows:
-            return [], meta, "Venice balance not usable"
+            return [], meta, "Venice reported a balance it couldn't total"
         return windows, meta, None
 
     for _source, api_key in candidates:
@@ -681,32 +917,40 @@ def fetch_venice_capacity() -> tuple[list[dict], str | None, dict | None]:
                     ).strip()
             except Exception:
                 detail = ""
-            last_error = (
-                f"Venice billing HTTP {status.strip()}: {detail}"
-                if detail
-                else f"Venice billing API returned HTTP {status.strip()}"
-            )
-            # Try next candidate on auth failures.
             if code in (401, 403):
+                last_error = (
+                    "Venice rejected this key. Billing needs an Admin key, "
+                    "not an inference key."
+                )
+                # Try next candidate on auth failures.
                 continue
+            last_error = (
+                f"Venice billing failed (HTTP {status.strip()}): {detail}"
+                if detail
+                else f"Venice billing failed (HTTP {status.strip()})"
+            )
             return [], last_error, None
 
         try:
             payload = json.loads(body)
-        except json.JSONDecodeError as exc:
-            last_error = f"Venice balance JSON error: {exc}"
+        except json.JSONDecodeError:
+            last_error = "Venice sent an unreadable billing response"
             continue
         if not isinstance(payload, dict):
-            last_error = "Venice balance response not an object"
+            last_error = "Venice sent an unreadable billing response"
             continue
 
         windows, meta, parse_err = parse_balance_payload(payload)
         if parse_err and not windows:
             last_error = parse_err
             continue
-        return windows, None, meta
+        # Spend cap first — it's the metered window with a real denominator. The
+        # prepaid balance follows as a plain figure. A missing cap is not an
+        # error: the balance is still worth showing on its own.
+        spend_windows, _ = fetch_venice_spend_window(api_key)
+        return spend_windows + windows, None, meta
 
-    return [], last_error or "Venice billing unavailable", None
+    return [], last_error or "Venice billing is unreachable", None
 
 
 # ── Provider payloads ────────────────────────────────────────────────────────
@@ -813,6 +1057,30 @@ def _providers_look_complete(payload: dict | None) -> bool:
     return {"anthropic", "grok", "codex"}.issubset(ids)
 
 
+def _spawn_bg_refresh() -> None:
+    """Refresh behind the response, one at a time. Caller holds `_cache_lock`.
+
+    Without the single-flight guard, every poll arriving while a refresh is
+    still running would queue another full provider sweep behind it.
+    """
+    global _refreshing
+    if _refreshing:
+        return
+    _refreshing = True
+
+    def run() -> None:
+        global _refreshing
+        try:
+            _snapshot(force=True)
+        except Exception:  # noqa: BLE001 — background thread must not raise
+            pass
+        finally:
+            with _cache_lock:
+                _refreshing = False
+
+    threading.Thread(target=run, name="llm-usage-bg-refresh", daemon=True).start()
+
+
 def _snapshot(force: bool = False) -> dict:
     global _cache, _cache_at
     now = time.monotonic()
@@ -826,33 +1094,37 @@ def _snapshot(force: bool = False) -> dict:
             return {**_cache, "cached": True}
 
         if not force:
-            disk = _read_disk_cache()
-            if disk is not None and _providers_look_complete(disk):
-                _cache = {**disk, "cached": True}
-                _cache_at = now
-                threading.Thread(
-                    target=lambda: _snapshot(force=True),
-                    name="llm-usage-bg-refresh",
-                    daemon=True,
-                ).start()
-                return {**disk, "cached": True}
+            # Expired or cold: answer immediately from the last good snapshot and
+            # refresh behind it. `_cache_at` is deliberately left alone — bumping
+            # it here would mark stale data fresh and suppress the retry for a
+            # full TTL if the background refresh failed.
+            stale = _cache if _providers_look_complete(_cache) else _read_disk_cache()
+            if stale is not None and _providers_look_complete(stale):
+                _spawn_bg_refresh()
+                return {**stale, "cached": True}
 
-        providers = _collect_providers()
-        any_windows = any(p.get("windows") for p in providers)
-        errors = [p["error"] for p in providers if p.get("error") and not p.get("windows")]
-        payload = {
-            "providers": providers,
-            "windows": _flatten_windows(providers),
-            "error": "; ".join(errors) if errors and not any_windows else None,
-            "source": "Claude · Grok · Codex · Venice",
-            "confidence": "actual" if any_windows else "unavailable",
-            "refreshed_at": datetime.now(timezone.utc).isoformat(),
-            "cache_ttl_sec": _CACHE_TTL_SEC,
-            "cached": False,
-        }
+    # Deliberately outside `_cache_lock`: a sweep spawns tmux, two CLIs, a Codex
+    # app-server and an HTTP call, so holding the lock here would make every poll
+    # arriving mid-refresh block for ~15s — the opposite of refreshing behind the
+    # response.
+    providers = _collect_providers()
+    any_windows = any(p.get("windows") for p in providers)
+    errors = [p["error"] for p in providers if p.get("error") and not p.get("windows")]
+    payload = {
+        "providers": providers,
+        "windows": _flatten_windows(providers),
+        "error": "; ".join(errors) if errors and not any_windows else None,
+        "source": "Claude · Grok · Codex · Venice",
+        "confidence": "actual" if any_windows else "unavailable",
+        "refreshed_at": datetime.now(timezone.utc).isoformat(),
+        "cache_ttl_sec": _CACHE_TTL_SEC,
+        "cached": False,
+    }
+
+    with _cache_lock:
         if any_windows:
             _cache = payload
-            _cache_at = now
+            _cache_at = time.monotonic()
             _write_disk_cache(payload)
         elif not force:
             disk = _read_disk_cache()
@@ -863,7 +1135,7 @@ def _snapshot(force: bool = False) -> dict:
                     "error": payload.get("error") or disk.get("error"),
                     "stale": True,
                 }
-        return payload
+    return payload
 
 
 @router.get("/usage")
