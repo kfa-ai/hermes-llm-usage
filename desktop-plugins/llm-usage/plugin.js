@@ -1,7 +1,7 @@
 /**
  * LLM Usage — Hermes Desktop plugin
  *
- * Floating HUD (close via header ✕; reopen from status-bar chip):
+ * Floating HUD (close via in-panel ✕; reopen from status-bar chip):
  *   Claude Code — Session / All models / Fable
  *   Grok        — Weekly
  *   Codex       — 5-hour / weekly
@@ -29,13 +29,14 @@ import {
   useQuery,
   useValue,
 } from '@hermes/plugin-sdk'
-import { useState } from 'react'
 import { jsx, jsxs } from 'react/jsx-runtime'
 
 const ID = 'llm-usage'
 const ROUTE = '/llm-usage'
 const REST_TIMEOUT_MS = 90_000
-const OPEN_STORAGE_KEY = 'floatingOpen'
+// v2 intentionally opens once after removing the nonstandard shell-header
+// dependency. Later close/reopen choices persist normally under this key.
+const OPEN_STORAGE_KEY = 'floatingOpen.v2'
 const QUERY_KEY = [ID, 'usage']
 
 /** Shared open-state for the floating card (chip ↔ close button). */
@@ -481,60 +482,10 @@ function useUsage(rest) {
   })
 }
 
-const headerBtnClass =
+const panelBtnClass =
   'grid size-5 place-items-center rounded text-(--ui-text-quaternary) transition-colors hover:bg-(--chrome-action-hover) hover:text-(--ui-text-primary) disabled:opacity-50'
 
-function FloatHeaderActions({ rest, onClose }) {
-  const [busy, setBusy] = useState(false)
-  const { isFetching } = useUsage(rest)
-  const spinning = busy || isFetching
-
-  return jsxs('div', {
-    className: 'flex items-center gap-0.5',
-    children: [
-      jsx(Tip, {
-        label: 'Refresh (CLI + API, can take ~15s)',
-        children: jsx('button', {
-          type: 'button',
-          className: headerBtnClass,
-          'data-floating-no-drag': '',
-          'aria-label': 'Refresh LLM usage',
-          disabled: spinning,
-          onClick: () => {
-            haptic('tap')
-            setBusy(true)
-            refreshUsage(rest)
-              .catch((err) => host.notifyError(err, 'Could not refresh LLM usage'))
-              .finally(() => setBusy(false))
-          },
-          children: jsx(Codicon, {
-            name: 'refresh',
-            size: '0.75rem',
-            spinning,
-          }),
-        }),
-      }),
-      onClose
-        ? jsx(Tip, {
-            label: 'Close panel (reopen from status bar)',
-            children: jsx('button', {
-              type: 'button',
-              className: headerBtnClass,
-              'data-floating-no-drag': '',
-              'aria-label': 'Close LLM usage',
-              onClick: () => {
-                haptic('tap')
-                onClose()
-              },
-              children: jsx(Codicon, { name: 'close', size: '0.75rem' }),
-            }),
-          })
-        : null,
-    ],
-  })
-}
-
-function UsageBoard({ rest, mode }) {
+function UsageBoard({ rest, mode, onClose }) {
   const { data, isLoading, isFetching, error, refetch, isError } = useUsage(rest)
   const providers = providersFromPayload(data)
   const anyWindows = providers.some((p) => (p.windows || []).length > 0)
@@ -555,31 +506,44 @@ function UsageBoard({ rest, mode }) {
       isPage ? 'mx-auto w-full max-w-md gap-3 p-5' : 'gap-1.5 p-2'
     ),
     children: [
-      // Page mode keeps an in-body toolbar; float mode uses headerActions.
-      !isFloat
-        ? jsxs('div', {
-            className: 'flex items-center gap-1.5',
-            children: [
-              jsx('div', {
-                className: 'min-w-0 flex-1 text-[0.6875rem] text-(--ui-text-quaternary)',
-                children: isPage
-                  ? jsxs('div', {
-                      children: [
-                        jsx('div', {
-                          className: 'text-lg font-semibold tracking-tight text-foreground',
-                          children: 'LLM Usage',
-                        }),
-                        jsx('div', {
-                          children: 'Account plan windows · not API-key caps',
-                        }),
-                      ],
-                    })
-                  : 'Plan windows',
-              }),
-              isFetching ? jsx(GlyphSpinner, { className: 'h-3.5 w-3.5 shrink-0' }) : null,
-              jsx(Tip, {
-                label: 'Refresh (CLI + API, can take ~15s)',
-                children: jsx(Button, {
+      // Controls live inside the plugin so the floating card works on stock
+      // Hermes; no core-only `headerActions` extension is required.
+      jsxs('div', {
+        className: 'flex items-center gap-1.5',
+        children: [
+          jsx('div', {
+            className: 'min-w-0 flex-1 text-[0.6875rem] text-(--ui-text-quaternary)',
+            children: isPage
+              ? jsxs('div', {
+                  children: [
+                    jsx('div', {
+                      className: 'text-lg font-semibold tracking-tight text-foreground',
+                      children: 'LLM Usage',
+                    }),
+                    jsx('div', {
+                      children: 'Account plan windows · not API-key caps',
+                    }),
+                  ],
+                })
+              : 'Plan windows',
+          }),
+          isFetching ? jsx(GlyphSpinner, { className: 'h-3.5 w-3.5 shrink-0' }) : null,
+          jsx(Tip, {
+            label: 'Refresh (CLI + API, can take ~15s)',
+            children: isFloat
+              ? jsx('button', {
+                  type: 'button',
+                  className: panelBtnClass,
+                  'aria-label': 'Refresh LLM usage',
+                  disabled: isFetching,
+                  onClick: onRefresh,
+                  children: jsx(Codicon, {
+                    name: 'refresh',
+                    size: '0.75rem',
+                    spinning: isFetching,
+                  }),
+                })
+              : jsx(Button, {
                   size: 'sm',
                   variant: 'ghost',
                   type: 'button',
@@ -593,10 +557,24 @@ function UsageBoard({ rest, mode }) {
                     ],
                   }),
                 }),
-              }),
-            ],
-          })
-        : null,
+          }),
+          isFloat && onClose
+            ? jsx(Tip, {
+                label: 'Close panel (reopen from status bar)',
+                children: jsx('button', {
+                  type: 'button',
+                  className: panelBtnClass,
+                  'aria-label': 'Close LLM usage',
+                  onClick: () => {
+                    haptic('tap')
+                    onClose()
+                  },
+                  children: jsx(Codicon, { name: 'close', size: '0.75rem' }),
+                }),
+              })
+            : null,
+        ],
+      }),
 
       isLoading && !data
         ? jsxs('div', {
@@ -730,7 +708,9 @@ export default {
       if (next) {
         if (!disposePane) {
           disposePane = ctx.register({
-            id: 'pane',
+            // Versioned once to discard stale off-screen geometry saved for
+            // `llm-usage:pane` by an older, wider Hermes window.
+            id: 'pane-v2',
             area: 'panes',
             title: 'LLM Usage',
             data: {
@@ -741,13 +721,9 @@ export default {
               // without scrolling or a band of dead space. Still resizable, and
               // scrolls if Codex also reports its 5-hour window.
               height: '384px',
-              headerActions: () =>
-                jsx(FloatHeaderActions, {
-                  rest: ctx.rest,
-                  onClose: () => setOpen(false),
-                }),
             },
-            render: () => jsx(UsageBoard, { rest: ctx.rest, mode: 'float' }),
+            render: () =>
+              jsx(UsageBoard, { rest: ctx.rest, mode: 'float', onClose: () => setOpen(false) }),
           })
         }
       } else if (disposePane) {

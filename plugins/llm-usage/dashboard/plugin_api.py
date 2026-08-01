@@ -102,12 +102,22 @@ def _workdir() -> Path:
     """Working directory for the throwaway CLI sessions.
 
     Only used as the tmux session's cwd. `/usage` is account-level, so the
-    directory has no bearing on the reading — set HERMES_LLM_USAGE_WORKDIR if a
-    specific one is needed (e.g. a folder the CLI has already been trusted in).
+    directory has no bearing on the reading — but launching Claude in $HOME
+    often stalls on the "home directory" welcome tips and never reaches a
+    prompt. Prefer a real project folder when available.
     """
     override = os.environ.get("HERMES_LLM_USAGE_WORKDIR")
     if override:
         path = Path(override).expanduser()
+        if path.is_dir():
+            return path
+    candidates = [
+        Path.home() / "Projects" / "hermes-llm-usage",
+        Path.home() / "Projects",
+        Path.home() / "Developer",
+        Path.home() / "code",
+    ]
+    for path in candidates:
         if path.is_dir():
             return path
     return Path.home()
@@ -305,7 +315,38 @@ def fetch_claude_cli_quota_windows() -> tuple[list[dict], str | None]:
         if started.returncode != 0:
             return [], f"could not start Claude usage session: {started.stderr or started.stdout}"
 
-        time.sleep(5)
+        def capture() -> str:
+            out = subprocess.run(
+                [tmux_bin, "capture-pane", "-t", session, "-p", "-S", "-160"],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            return out.stdout or ""
+
+        # Wait until the TUI prompt is live. Avoid matching Tips copy like
+        # "for shortcuts" on the welcome banner (false ready).
+        ready = False
+        for _ in range(30):  # up to ~30s
+            pane = capture()
+            if re.search(r"(manual mode|^\s*❯|Try \")", pane, re.I | re.M):
+                ready = True
+                break
+            # Also accept a bare bottom prompt once tips chrome is gone.
+            if "Welcome back" not in pane and re.search(r"/\w+", pane):
+                ready = True
+                break
+            time.sleep(1)
+        if not ready:
+            time.sleep(3)
+
+        # Clear any leftover input, open /usage (Claude 2.x Usage panel).
+        subprocess.run(
+            [tmux_bin, "send-keys", "-t", session, "C-u"],
+            check=False,
+            capture_output=True,
+        )
+        time.sleep(0.2)
         sent = subprocess.run(
             [tmux_bin, "send-keys", "-t", session, "/usage", "Enter"],
             check=False,
@@ -315,17 +356,13 @@ def fetch_claude_cli_quota_windows() -> tuple[list[dict], str | None]:
         if sent.returncode != 0:
             return [], "could not request Claude /usage"
 
-        time.sleep(4)
-        captured = subprocess.run(
-            [tmux_bin, "capture-pane", "-t", session, "-p", "-S", "-120"],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        if captured.returncode != 0:
-            return [], "could not read Claude /usage pane"
-
-        windows = parse_claude_usage(captured.stdout or "")
+        # Poll until /usage content appears.
+        windows: list[dict] = []
+        for _ in range(20):  # up to ~20s
+            time.sleep(1)
+            windows = parse_claude_usage(capture())
+            if windows:
+                break
         if not windows:
             return [], "parsed zero windows from Claude /usage (CLI UI may have changed)"
         return _with_reset_epoch(windows), None
@@ -824,9 +861,27 @@ def fetch_venice_capacity() -> tuple[list[dict], str | None, dict | None]:
             balances.get("diemEpochAllocation"),
         )
         if diem is None and usd is None:
-            # A 200 with no balance fields almost always means an inference-only
-            # key: it can call models but can't read billing.
-            return [], None, "Venice returned no balance. Check the key has Admin scope."
+            # 200 with null balances = Admin auth worked; account is empty.
+            usd = 0.0
+            windows = [
+                {
+                    "label": "USD balance",
+                    "used_pct": 0.0,
+                    "reset_label": "$0.00 remaining",
+                    "id": "usd_balance",
+                }
+            ]
+            meta = {
+                "kind": "credits",
+                "remaining_usd": 0.0,
+                "diem": None,
+                "diem_epoch_allocation": epoch,
+                "can_consume": data.get("canConsume", payload.get("canConsume")),
+                "consumption_currency": data.get(
+                    "consumptionCurrency", payload.get("consumptionCurrency")
+                ),
+            }
+            return windows, meta, None
 
         windows: list[dict] = []
         if diem is not None and epoch is not None and epoch > 0:
