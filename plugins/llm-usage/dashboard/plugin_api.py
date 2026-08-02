@@ -3,6 +3,8 @@
 Providers (account plan windows only — never API-key caps):
   - Claude Code: session / all-models / Fable via CLI `/usage` (tmux capture)
   - Grok / xAI: weekly limit via Grok CLI `/usage` (tmux capture)
+  - Nous Research: monthly subscription / top-up via Hermes Portal account API
+  - Codex / Venice: account rate limits and billing balances
 
 Results cached 5 minutes in-memory + disk (~/.hermes/cache/llm-usage.json).
 Mounted at /api/plugins/llm-usage/ when this plugin is in plugins.enabled.
@@ -1011,6 +1013,90 @@ def fetch_venice_capacity() -> tuple[list[dict], str | None, dict | None]:
     return [], last_error or "Venice billing is unreachable", None
 
 
+# ── Nous Portal ──────────────────────────────────────────────────────────────
+
+
+def _parse_iso_epoch(value: object) -> float | None:
+    """Convert the Portal's ISO renewal timestamp to epoch seconds."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        text = value.strip()
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        return datetime.fromisoformat(text).timestamp()
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def fetch_nous_portal_usage() -> tuple[list[dict], str | None, dict | None]:
+    """Read the authenticated Nous Portal subscription account snapshot.
+
+    Nous' public inference OpenAPI only documents completion endpoints; it does
+    not expose a stable usage route. Hermes itself owns the supported
+    ``/api/oauth/account`` client, so reuse its refresh-aware OAuth resolver and
+    normalized account model instead of scraping the billing web UI.
+    """
+    try:
+        from agent.billing_usage import build_usage_model
+
+        model = build_usage_model(timeout=15.0)
+    except Exception as exc:  # noqa: BLE001
+        return [], f"Nous Portal usage unavailable: {exc}", None
+
+    if not getattr(model, "available", False):
+        return [], "Nous Portal is not logged in or account usage is unavailable", None
+
+    windows: list[dict] = []
+    plan_bar = getattr(model, "plan_bar", None)
+    if plan_bar is not None:
+        windows.append(
+            {
+                "label": f"Monthly {getattr(model, 'plan_name', None) or 'plan'}",
+                "used_pct": float(plan_bar.pct_used or 0),
+                "reset_label": getattr(model, "renews_display", None),
+                "resets_at": _parse_iso_epoch(getattr(model, "renews_at", None)),
+                "detail": (
+                    f"${getattr(plan_bar, 'remaining_usd', 0):,.2f} of "
+                    f"${getattr(plan_bar, 'total_usd', 0):,.2f} left"
+                ),
+                "id": "monthly_plan",
+            }
+        )
+    elif getattr(model, "subscription_remaining_usd", None) is not None:
+        windows.append(
+            {
+                "label": "Monthly plan balance",
+                "used_pct": 0.0,
+                "reset_label": getattr(model, "renews_display", None),
+                "resets_at": _parse_iso_epoch(getattr(model, "renews_at", None)),
+                "detail": f"${model.subscription_remaining_usd:,.2f} USD remaining",
+                "id": "monthly_balance",
+            }
+        )
+
+    topup_bar = getattr(model, "topup_bar", None)
+    if topup_bar is not None:
+        windows.append(
+            {
+                "label": "Top-up balance",
+                "used_pct": 0.0,
+                "reset_label": f"${topup_bar.remaining_usd:,.2f} USD remaining",
+                "id": "topup_balance",
+            }
+        )
+
+    capacity = {
+        "status": getattr(model, "status", None),
+        "plan_name": getattr(model, "plan_name", None),
+        "renews_at": getattr(model, "renews_at", None),
+        "subscription_remaining_usd": getattr(model, "subscription_remaining_usd", None),
+        "topup_remaining_usd": getattr(model, "topup_remaining_usd", None),
+        "total_spendable_usd": getattr(model, "total_spendable_usd", None),
+    }
+    return windows, None, capacity
+
+
 # ── Provider payloads ────────────────────────────────────────────────────────
 
 
@@ -1057,6 +1143,7 @@ def _collect_providers() -> list[dict]:
         "anthropic": lambda: (*fetch_claude_cli_quota_windows(), None),
         "grok": lambda: (*fetch_grok_cli_quota_windows(), None),
         "codex": lambda: (*fetch_codex_app_server_quota(), None),
+        "nous": fetch_nous_portal_usage,
         "venice": venice_job,
     }
     results: dict[str, tuple[list[dict], str | None, dict | None]] = {}
@@ -1087,6 +1174,7 @@ def _collect_providers() -> list[dict]:
         pack("anthropic", "Claude Code", "Claude Code CLI /usage", "Session · all models · Fable"),
         pack("grok", "Grok", "Grok CLI /usage", "Weekly plan window"),
         pack("codex", "Codex", "Codex app-server rate limits", "5-hour · weekly"),
+        pack("nous", "Nous Research", "Hermes Portal account API", "Monthly subscription · top-up"),
         pack("venice", "Venice", "Venice billing /balance", "Account balance · DIEM epoch"),
     ]
 
@@ -1100,7 +1188,7 @@ def _flatten_windows(providers: list[dict]) -> list[dict]:
     return out
 
 
-_EXPECTED_PROVIDER_IDS = ("anthropic", "grok", "codex", "venice")
+_EXPECTED_PROVIDER_IDS = ("anthropic", "grok", "codex", "nous", "venice")
 
 
 def _providers_look_complete(payload: dict | None) -> bool:
@@ -1111,8 +1199,9 @@ def _providers_look_complete(payload: dict | None) -> bool:
     if not isinstance(providers, list) or not providers:
         return False
     ids = {p.get("id") for p in providers if isinstance(p, dict)}
-    # Require the multi-provider shape — old Claude+Grok-only caches must refresh.
-    return {"anthropic", "grok", "codex"}.issubset(ids)
+    # Require the current multi-provider shape so a cache from before a provider
+    # was added cannot hide the new section indefinitely.
+    return set(_EXPECTED_PROVIDER_IDS).issubset(ids)
 
 
 def _spawn_bg_refresh() -> None:
@@ -1172,7 +1261,7 @@ def _snapshot(force: bool = False) -> dict:
         "providers": providers,
         "windows": _flatten_windows(providers),
         "error": "; ".join(errors) if errors and not any_windows else None,
-        "source": "Claude · Grok · Codex · Venice",
+        "source": "Claude · Grok · Codex · Nous Research · Venice",
         "confidence": "actual" if any_windows else "unavailable",
         "refreshed_at": datetime.now(timezone.utc).isoformat(),
         "cache_ttl_sec": _CACHE_TTL_SEC,
@@ -1211,6 +1300,7 @@ async def health():
             "anthropic": {"claude": _which("claude"), "tmux": _which("tmux")},
             "grok": {"grok": _which("grok"), "tmux": _which("tmux")},
             "codex": {"codex": _which("codex")},
+            "nous": {"portal": True},
             "venice": {
                 "key": bool(_read_env_key(["VENICE_API_KEY", "HERMES_CUSTOM_VENICE_API_KEY"]))
             },

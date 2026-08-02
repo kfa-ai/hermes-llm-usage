@@ -17,9 +17,13 @@ import {
   ErrorState,
   GlyphSpinner,
   PALETTE_AREA,
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
   ROUTES_AREA,
   SIDEBAR_NAV_AREA,
   ScrollArea,
+  Switch,
   Tip,
   atom,
   cn,
@@ -30,6 +34,7 @@ import {
   useValue,
 } from '@hermes/plugin-sdk'
 import { jsx, jsxs } from 'react/jsx-runtime'
+import { useEffect, useRef } from 'react'
 
 const ID = 'llm-usage'
 const ROUTE = '/llm-usage'
@@ -37,10 +42,17 @@ const REST_TIMEOUT_MS = 90_000
 // v2 intentionally opens once after removing the nonstandard shell-header
 // dependency. Later close/reopen choices persist normally under this key.
 const OPEN_STORAGE_KEY = 'floatingOpen.v2'
+const PROVIDERS_STORAGE_KEY = 'visibleProviders.v1'
+const SIZE_STORAGE_KEY = 'floatingSize.v1'
 const QUERY_KEY = [ID, 'usage']
+const DEFAULT_VISIBLE_PROVIDERS = ['anthropic', 'grok', 'codex', 'nous', 'venice']
+const DEFAULT_FLOATING_SIZE = { width: 330, height: 384 }
+const SIZE_LIMITS = { width: [280, 560], height: [260, 720] }
 
 /** Shared open-state for the floating card (chip ↔ close button). */
 const $floatingOpen = atom(true)
+const $visibleProviders = atom(DEFAULT_VISIBLE_PROVIDERS)
+const $floatingSize = atom(DEFAULT_FLOATING_SIZE)
 
 /** @typedef {{ label: string, used_pct: number, reset_label?: string | null, id?: string }} QuotaWindow */
 /** @typedef {{
@@ -482,12 +494,149 @@ function useUsage(rest) {
   })
 }
 
+const PROVIDER_OPTIONS = [
+  { id: 'anthropic', label: 'Claude Code' },
+  { id: 'grok', label: 'Grok' },
+  { id: 'codex', label: 'Codex' },
+  { id: 'nous', label: 'Nous Research' },
+  { id: 'venice', label: 'Venice' },
+]
+
+function visibleProviderList(providers) {
+  const visible = new Set($visibleProviders.get())
+  return providers.filter((provider) => visible.has(provider.id))
+}
+
+function SettingsMenu({ storage }) {
+  const visible = useValue($visibleProviders)
+
+  const toggleProvider = (id, next) => {
+    const current = new Set(visible)
+    if (next) current.add(id)
+    else current.delete(id)
+    const ids = PROVIDER_OPTIONS.map((option) => option.id).filter((id_) => current.has(id_))
+    $visibleProviders.set(ids)
+    storage.set(PROVIDERS_STORAGE_KEY, ids)
+  }
+
+  return jsxs(Popover, {
+    children: [
+      jsx(Tip, {
+        label: 'LLM Usage settings',
+        children: jsx(PopoverTrigger, {
+          asChild: true,
+          children: jsx('button', {
+            type: 'button',
+            className: panelBtnClass,
+            'data-floating-no-drag': '',
+            'aria-label': 'LLM Usage settings',
+            children: jsx(Codicon, { name: 'settings-gear', size: '0.75rem' }),
+          }),
+        }),
+      }),
+      jsx(PopoverContent, {
+        align: 'end',
+        side: 'bottom',
+        style: { width: '230px', padding: '9px' },
+        children: jsxs('div', {
+          className: 'flex flex-col gap-2 text-[0.6875rem] text-(--ui-text-secondary)',
+          children: [
+            jsx('div', {
+              className: 'font-medium text-(--ui-text-primary)',
+              children: 'Visible providers',
+            }),
+            ...PROVIDER_OPTIONS.map((option) =>
+              jsxs('label', {
+                className: 'flex items-center justify-between gap-3',
+                children: [
+                  jsx('span', { children: option.label }),
+                  jsx(Switch, {
+                    id: `llm-usage-provider-${option.id}`,
+                    size: 'xs',
+                    checked: visible.includes(option.id),
+                    onCheckedChange: (next) => toggleProvider(option.id, next),
+                  }),
+                ],
+              }, option.id)
+            ),
+          ],
+        }),
+      }),
+    ],
+  })
+}
+
 const panelBtnClass =
   'grid size-5 place-items-center rounded text-(--ui-text-quaternary) transition-colors hover:bg-(--chrome-action-hover) hover:text-(--ui-text-primary) disabled:opacity-50'
 
-function UsageBoard({ rest, mode, onClose }) {
+function ResizeHandle({ size, onResize, paneRef }) {
+  const drag = useRef(null)
+
+  useEffect(() => {
+    const onMove = (event) => {
+      if (!drag.current) return
+      const next = {
+        width: drag.current.startWidth + event.clientX - drag.current.x,
+        height: drag.current.startHeight + event.clientY - drag.current.y,
+      }
+      const clamped = {
+        width: Math.max(SIZE_LIMITS.width[0], Math.min(SIZE_LIMITS.width[1], next.width)),
+        height: Math.max(SIZE_LIMITS.height[0], Math.min(SIZE_LIMITS.height[1], next.height)),
+      }
+      drag.current.current = clamped
+      onResize(clamped, false, paneRef.current)
+    }
+    const onUp = () => {
+      if (drag.current?.current) onResize(drag.current.current, true, paneRef.current)
+      drag.current = null
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    return () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+    }
+  }, [onResize])
+
+  return jsx('button', {
+    type: 'button',
+    'data-floating-no-drag': '',
+    'aria-label': 'Resize LLM Usage window',
+    title: 'Resize window',
+    onPointerDown: (event) => {
+      event.preventDefault()
+      event.stopPropagation()
+      drag.current = {
+        x: event.clientX,
+        y: event.clientY,
+        startWidth: size.width,
+        startHeight: size.height,
+        current: size,
+      }
+    },
+    style: {
+      position: 'absolute',
+      right: '3px',
+      bottom: '3px',
+      width: '12px',
+      height: '12px',
+      padding: 0,
+      border: 0,
+      borderRight: '2px solid color-mix(in srgb, var(--ui-text-primary) 38%, transparent)',
+      borderBottom: '2px solid color-mix(in srgb, var(--ui-text-primary) 38%, transparent)',
+      borderRadius: '0 0 2px 0',
+      background: 'transparent',
+      cursor: 'nwse-resize',
+    },
+  })
+}
+
+function UsageBoard({ rest, mode, onClose, storage, onResize }) {
   const { data, isLoading, isFetching, error, refetch, isError } = useUsage(rest)
-  const providers = providersFromPayload(data)
+  useValue($visibleProviders)
+  const floatingSize = useValue($floatingSize)
+  const paneRef = useRef(null)
+  const providers = visibleProviderList(providersFromPayload(data))
   const anyWindows = providers.some((p) => (p.windows || []).length > 0)
   const errMsg =
     (error && (error.message || String(error))) || data?.error || null
@@ -501,8 +650,9 @@ function UsageBoard({ rest, mode, onClose }) {
   }
 
   return jsxs('div', {
+    ref: paneRef,
     className: cn(
-      'flex h-full min-h-0 flex-col text-sm',
+      'relative flex h-full min-h-0 flex-col text-sm',
       isPage ? 'mx-auto w-full max-w-md gap-3 p-5' : 'gap-1.5 p-2'
     ),
     children: [
@@ -528,6 +678,7 @@ function UsageBoard({ rest, mode, onClose }) {
               : 'Plan windows',
           }),
           isFetching ? jsx(GlyphSpinner, { className: 'h-3.5 w-3.5 shrink-0' }) : null,
+          storage ? jsx(SettingsMenu, { storage }) : null,
           jsx(Tip, {
             label: 'Refresh (CLI + API, can take ~15s)',
             children: isFloat
@@ -645,6 +796,7 @@ function UsageBoard({ rest, mode, onClose }) {
           }),
         ],
       }),
+      isFloat && onResize ? jsx(ResizeHandle, { size: floatingSize, onResize, paneRef }) : null,
     ],
   })
 }
@@ -652,7 +804,8 @@ function UsageBoard({ rest, mode, onClose }) {
 function StatusChip({ rest, onToggle }) {
   const open = useValue($floatingOpen)
   const { data, isFetching, isError } = useUsage(rest)
-  const providers = providersFromPayload(data)
+  useValue($visibleProviders)
+  const providers = visibleProviderList(providersFromPayload(data))
   const worst = worstAcross(providers)
   // Chip speaks in used %, same as the panel — it previously showed remaining,
   // so the same quota read "LLM 11%" here and "89%" one click away.
@@ -697,38 +850,74 @@ export default {
     // Restore last open/closed preference.
     const storedOpen = ctx.storage.get(OPEN_STORAGE_KEY, true)
     $floatingOpen.set(storedOpen !== false)
+    const storedProviders = ctx.storage.get(PROVIDERS_STORAGE_KEY, DEFAULT_VISIBLE_PROVIDERS)
+    $visibleProviders.set(
+      Array.isArray(storedProviders)
+        ? PROVIDER_OPTIONS.map((option) => option.id).filter((id) => storedProviders.includes(id))
+        : DEFAULT_VISIBLE_PROVIDERS
+    )
+    const storedSize = ctx.storage.get(SIZE_STORAGE_KEY, DEFAULT_FLOATING_SIZE)
+    $floatingSize.set({
+      width:
+        Number.isFinite(storedSize?.width)
+          ? Math.max(SIZE_LIMITS.width[0], Math.min(SIZE_LIMITS.width[1], storedSize.width))
+          : DEFAULT_FLOATING_SIZE.width,
+      height:
+        Number.isFinite(storedSize?.height)
+          ? Math.max(SIZE_LIMITS.height[0], Math.min(SIZE_LIMITS.height[1], storedSize.height))
+          : DEFAULT_FLOATING_SIZE.height,
+    })
 
     /** @type {null | (() => void)} */
     let disposePane = null
+
+    const registerPane = () => {
+      if (disposePane) return
+      const size = $floatingSize.get()
+      disposePane = ctx.register({
+        // Versioned once to discard stale off-screen geometry saved for
+        // `llm-usage:pane` by an older, wider Hermes window.
+        id: 'pane-v2',
+        area: 'panes',
+        title: 'LLM Usage',
+        data: {
+          placement: 'floating',
+          anchor: 'top-right',
+          width: `${size.width}px`,
+          height: `${size.height}px`,
+        },
+        render: () =>
+          jsx(UsageBoard, {
+            rest: ctx.rest,
+            mode: 'float',
+            storage: ctx.storage,
+            onResize: resizeFloating,
+            onClose: () => setOpen(false),
+          }),
+      })
+    }
 
     const setOpen = (next) => {
       $floatingOpen.set(next)
       ctx.storage.set(OPEN_STORAGE_KEY, next)
       // Registry `when` is not reactive — must re-register to show/hide.
       if (next) {
-        if (!disposePane) {
-          disposePane = ctx.register({
-            // Versioned once to discard stale off-screen geometry saved for
-            // `llm-usage:pane` by an older, wider Hermes window.
-            id: 'pane-v2',
-            area: 'panes',
-            title: 'LLM Usage',
-            data: {
-              placement: 'floating',
-              anchor: 'top-right',
-              width: '330px',
-              // Fits the usual seven rows (3 Claude · Grok · Codex · 2 Venice)
-              // without scrolling or a band of dead space. Still resizable, and
-              // scrolls if Codex also reports its 5-hour window.
-              height: '384px',
-            },
-            render: () =>
-              jsx(UsageBoard, { rest: ctx.rest, mode: 'float', onClose: () => setOpen(false) }),
-          })
-        }
+        registerPane()
       } else if (disposePane) {
         disposePane()
         disposePane = null
+      }
+    }
+
+    function resizeFloating(next, commit = true, board) {
+      const floatingPane = board?.closest?.('[data-floating-pane]')
+      if (floatingPane) {
+        floatingPane.style.width = `${next.width}px`
+        floatingPane.style.height = `${next.height}px`
+      }
+      if (commit) {
+        $floatingSize.set(next)
+        ctx.storage.set(SIZE_STORAGE_KEY, next)
       }
     }
 
@@ -741,7 +930,7 @@ export default {
       id: 'page',
       area: ROUTES_AREA,
       data: { path: ROUTE },
-      render: () => jsx(UsageBoard, { rest: ctx.rest, mode: 'page' }),
+      render: () => jsx(UsageBoard, { rest: ctx.rest, mode: 'page', storage: ctx.storage }),
     })
 
     ctx.register({
@@ -772,7 +961,7 @@ export default {
         data: {
           id: 'llm-usage.open',
           label: 'Show LLM usage panel',
-          keywords: ['llm', 'claude', 'grok', 'codex', 'venice', 'usage', 'quota'],
+          keywords: ['llm', 'claude', 'grok', 'codex', 'nous', 'venice', 'usage', 'quota'],
           run: () => setOpen(true),
         },
       },
@@ -805,11 +994,11 @@ export default {
         data: {
           id: 'llm-usage.refresh',
           label: 'Refresh LLM usage',
-          keywords: ['llm', 'claude', 'grok', 'codex', 'venice', 'refresh'],
+          keywords: ['llm', 'claude', 'grok', 'codex', 'nous', 'venice', 'refresh'],
           run: async () => {
             try {
               const payload = await refreshUsage(ctx.rest)
-              const providers = providersFromPayload(payload)
+              const providers = visibleProviderList(providersFromPayload(payload))
               const worst = worstAcross(providers)
               host.notify({
                 kind: worst && worst.used_pct >= 90 ? 'warning' : 'info',

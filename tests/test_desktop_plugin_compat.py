@@ -16,11 +16,21 @@ class DesktopPluginCompatibilityTests(unittest.TestCase):
         )
         self.assertIn("const OPEN_STORAGE_KEY = 'floatingOpen.v2'", source)
         self.assertIn("id: 'pane-v2'", source)
-        self.assertIn("function UsageBoard({ rest, mode, onClose })", source)
+        self.assertIn("function UsageBoard({ rest, mode, onClose, storage, onResize })", source)
         self.assertIn(
-            "render: () =>\n              jsx(UsageBoard, { rest: ctx.rest, mode: 'float', onClose: () => setOpen(false) })",
+            "mode: 'float',\n            storage: ctx.storage,",
             source,
         )
+        self.assertIn("const PROVIDERS_STORAGE_KEY = 'visibleProviders.v1'", source)
+        self.assertIn("function SettingsMenu({ storage })", source)
+        self.assertIn("Nous Research", source)
+        self.assertIn("const SIZE_STORAGE_KEY = 'floatingSize.v1'", source)
+        self.assertIn("width: `${size.width}px`", source)
+        self.assertIn("function ResizeHandle({ size, onResize, paneRef })", source)
+        self.assertIn("'aria-label': 'Resize LLM Usage window'", source)
+        self.assertIn("closest?.('[data-floating-pane]')", source)
+        self.assertIn("floatingPane.style.width", source)
+        self.assertNotIn("children: 'Floating window size'", source)
 
 
 if __name__ == "__main__":

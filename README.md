@@ -7,6 +7,7 @@ Floating capacity HUD for **Hermes Desktop** — account plan windows and balanc
 | **Claude Code** | Session · All models · Fable (CLI `/usage`) |
 | **Grok** | Weekly (CLI `/usage`) |
 | **Codex** | 5-hour / weekly (app-server rate limits) |
+| **Nous Research** | Monthly subscription allowance, renewal, and top-up balance (Portal account API) |
 | **Venice** | USD / DIEM balance (Admin billing API) |
 
 Successor to the macOS menubar app [`llm-usage-bar`](https://github.com/kfa-ai/llm-usage-bar) for day-to-day use inside Hermes. That Tauri app stays available as a standalone reference; this repo is the Hermes-native plugin.
@@ -20,7 +21,7 @@ id is load-bearing:
 
 - install paths — `$HERMES_HOME/{plugins,desktop-plugins}/llm-usage/`
 - the backend route — `/api/plugins/llm-usage/*`
-- the floating pane id, and the `floatingOpen` plugin-storage key
+- persisted open/closed state in the plugin-storage namespace
 
 Changing the id resets saved pane geometry and orphans the old install
 directories, so a rename wants an uninstall step rather than a second `install.sh`.
@@ -64,13 +65,23 @@ Profile-specific: use `$HERMES_HOME` instead of `~/.hermes`.
 
 | Control | Action |
 |---|---|
-| Floating card | Drag header · resize SE corner · collapse chevron |
-| Header **↻** | Force refresh (CLI + API; can take ~15s) |
-| Header **✕** | Hide card |
+| Floating card | Drag header · collapse chevron |
+| In-panel **↻** | Force refresh (CLI + API; can take ~15s) |
+| In-panel **✕** | Hide card |
+| In-panel **⚙** | Toggle providers |
+| Bottom-right corner grip | Drag to resize the floating card |
 | Status-bar **LLM …** chip | Toggle card open/closed |
 | ⌘K | Show / Hide / Refresh / Open full page |
 
-Preferences (open/closed) persist per plugin storage.
+Preferences (open/closed, visible providers, and floating size) persist per plugin storage.
+
+The floating card has a small bottom-right resize grip. Drag it to grow or
+shrink the card; size is persisted automatically and is not part of settings.
+
+The HUD uses Hermes' public `placement: 'floating'` plugin surface only. Its
+refresh/close controls live inside the plugin, so it does not require a patched
+Hermes core. The pane contribution id is versioned when necessary to discard
+stale off-screen geometry saved by an older window layout.
 
 ---
 
@@ -82,6 +93,7 @@ Preferences (open/closed) persist per plugin storage.
 | Grok | `grok` (xAI CLI) + `tmux` |
 | Codex | `codex` CLI (app-server) |
 | Venice | Admin API key in `~/.hermes/.env` as `VENICE_API_KEY` or `HERMES_CUSTOM_VENICE_API_KEY` |
+| Nous Research | Hermes Portal login (`hermes portal` / `hermes model`) |
 
 Inference-only Venice keys can call models but **not** `/billing/balance` (needs Admin).
 
@@ -108,7 +120,10 @@ Each quota window carries `used_pct`, `reset_label` (raw provider wording) and
 `resets_at` (epoch seconds, `null` when unparseable). Codex supplies a real
 timestamp; Claude and Grok are scraped text run through `parse_reset_to_epoch`.
 
-Results cache ~5 minutes in memory + `~/.hermes/cache/llm-usage.json`. Expiry
+Nous usage uses Hermes' authenticated `/api/oauth/account` client. The public
+Nous inference OpenAPI documents completions only; it does not document a stable
+usage endpoint, so the plugin does not scrape the billing page or invent a
+`/v1/usage` contract. Results cache ~5 minutes in memory + `~/.hermes/cache/llm-usage.json`. Expiry
 serves the last good snapshot and refreshes behind it, so a poll never waits on
 the provider sweep (~15s).
 
