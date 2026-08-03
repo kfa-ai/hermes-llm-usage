@@ -39,7 +39,10 @@ class DesktopPluginCompatibilityTests(unittest.TestCase):
         )
         self.assertIn("$panelMode.set(storedMode === 'docked' ? 'docked' : DEFAULT_PANEL_MODE)", source)
         self.assertIn("const OPEN_STORAGE_KEY = 'floatingOpen.v2'", source)
-        self.assertIn("id: 'pane-v2'", source)
+        # Float and dock must register under different pane ids: the host
+        # persists its dock layout by pane id, so a shared id lets a remembered
+        # dock tile render the floating registration a second time.
+        self.assertIn("id: mode === 'float' ? 'pane-float-v1' : 'pane-v2'", source)
         self.assertIn(
             "function UsageBoard({ rest, mode, onClose, onFloat, onModeChange, storage, onResize })",
             source,

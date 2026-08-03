@@ -37,7 +37,7 @@ import {
 import { jsx, jsxs } from 'react/jsx-runtime'
 import { useEffect, useRef } from 'react'
 
-const VERSION = '0.4.0'
+const VERSION = '0.4.1'
 const ID = 'llm-usage'
 const ROUTE = '/llm-usage'
 const REST_TIMEOUT_MS = 90_000
@@ -967,9 +967,14 @@ export default {
       const size = $floatingSize.get()
       const mode = $panelMode.get()
       disposePane = ctx.register({
-        // Versioned once to discard stale off-screen geometry saved for
-        // `llm-usage:pane` by an older, wider Hermes window.
-        id: 'pane-v2',
+        // Distinct ids per mode. The host persists its dock layout tree by
+        // pane id across sessions, so a shared id lets a remembered dock tile
+        // resolve the floating registration and render it a second time
+        // (floating layer + dock tile). Keeping 'pane-v2' as the docked id
+        // reuses the dock slot the layout already remembers; 'pane-float-v1'
+        // is fresh so no dock tile can ever claim it. ('pane-v2' itself was
+        // versioned once to discard stale off-screen floating geometry.)
+        id: mode === 'float' ? 'pane-float-v1' : 'pane-v2',
         area: 'panes',
         title: 'LLM Usage',
         data: {
