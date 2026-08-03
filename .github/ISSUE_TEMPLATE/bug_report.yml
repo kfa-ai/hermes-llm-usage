@@ -1,0 +1,61 @@
+name: Bug report
+description: Something in the LLM Usage panel does not work
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing: this plugin reports **account-level** plan windows and
+        balances only — never API-key caps. Claude/Grok need their CLIs + `tmux`;
+        Codex needs the `codex` CLI; Venice needs an **Admin** billing key;
+        Nous needs a Hermes Portal login.
+
+  - type: input
+    id: hermes-version
+    attributes:
+      label: Hermes Desktop version
+      description: Settings → About, or `hermes --version`
+      placeholder: "0.19.0"
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: OS
+      placeholder: "macOS 15.5 (Apple Silicon)"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: provider
+    attributes:
+      label: Provider (if relevant)
+      options:
+        - Claude Code
+        - Grok
+        - Codex
+        - Nous Research
+        - Venice
+        - Panel / chrome (not provider-specific)
+        - Install / enable
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, what you got instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: console
+    attributes:
+      label: Console / log output
+      description: >
+        Paste Desktop console lines mentioning `llm-usage`, or the body of
+        `GET /api/plugins/llm-usage/usage` / health if you have it. Optional,
+        but it usually decides the issue.
+      render: text

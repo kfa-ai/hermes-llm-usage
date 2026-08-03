@@ -1,37 +1,46 @@
-# Hermes LLM Usage
+<h1 align="center">hermes-llm-usage</h1>
 
-Floating capacity HUD for **Hermes Desktop** — account plan windows and balances, not API-key caps.
+<p align="center">
+  Floating multi-provider capacity HUD for Hermes Desktop —
+  account plan windows and balances, not API-key caps.
+</p>
+
+<p align="center">
+  <img alt="Hermes Desktop plugin" src="https://img.shields.io/badge/Hermes-Desktop%20Plugin-2f81f7?style=flat-square">
+  <img alt="JavaScript ESM" src="https://img.shields.io/badge/JavaScript-ESM-f7df1e?style=flat-square&logo=javascript&logoColor=111111">
+  <img alt="Python FastAPI backend" src="https://img.shields.io/badge/Python-FastAPI-3776ab?style=flat-square&logo=python&logoColor=white">
+  <img alt="Providers" src="https://img.shields.io/badge/Providers-Claude%20%7C%20Grok%20%7C%20Codex%20%7C%20Nous%20%7C%20Venice-111827?style=flat-square">
+  <img alt="License MIT" src="https://img.shields.io/badge/License-MIT-22c55e?style=flat-square">
+  <a href="https://github.com/kfa-ai/hermes-llm-usage/actions/workflows/check.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/kfa-ai/hermes-llm-usage/check.yml?branch=main&style=flat-square&label=check"></a>
+  <a href="https://github.com/kfa-ai/hermes-llm-usage/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/kfa-ai/hermes-llm-usage?style=flat-square&label=release"></a>
+</p>
+
+At-a-glance plan windows for the providers you actually use inside Hermes:
 
 | Provider | What it shows |
-|---|---|
+| --- | --- |
 | **Claude Code** | Session · All models · Fable (CLI `/usage`) |
 | **Grok** | Weekly (CLI `/usage`) |
-| **Codex** | 5-hour / weekly (app-server rate limits) |
-| **Nous Research** | Monthly subscription allowance, renewal, and top-up balance (Portal account API) |
+| **Codex** | Weekly (+ 5-hour when present); banked usage-reset pill |
+| **Nous Research** | Monthly subscription allowance, renewal, top-up |
 | **Venice** | USD / DIEM balance (Admin billing API) |
 
-Successor to the macOS menubar app [`llm-usage-bar`](https://github.com/kfa-ai/llm-usage-bar) for day-to-day use inside Hermes. That Tauri app stays available as a standalone reference; this repo is the Hermes-native plugin.
+Successor to the macOS menubar app [`llm-usage-bar`](https://github.com/kfa-ai/llm-usage-bar) for day-to-day use inside Hermes. That Tauri app stays as a standalone reference; this repo is the Hermes-native plugin.
 
-**Status:** private while we polish. Not public yet.
+## Features
 
-**Planned rename:** this will be published as **`hermes-llm-usage-bar`**;
-`hermes-llm-usage` is an internal working name. The repo name is cosmetic, but
-decide deliberately whether the *plugin id* (`llm-usage`) changes with it — that
-id is load-bearing:
-
-- install paths — `$HERMES_HOME/{plugins,desktop-plugins}/llm-usage/`
-- the backend route — `/api/plugins/llm-usage/*`
-- persisted open/closed state in the plugin-storage namespace
-
-Changing the id resets saved pane geometry and orphans the old install
-directories, so a rename wants an uninstall step rather than a second `install.sh`.
-
----
+- Floating HUD + status-bar chip + full page + ⌘K commands.
+- Multi-provider sections with quiet-until-it-matters meters (theme-live accent → destructive).
+- Provider visibility toggles and a corner resize grip (sizes persist).
+- Codex banked **usage-limit resets** as a header pill with expiry on hover.
+- Disk + memory cache (~5 min) so polls never block on a full provider sweep.
+- Stock Hermes only — no core patches; `placement: 'floating'` public surface.
 
 ## Install
 
 ```bash
-# from a clone of this repo
+git clone git@github.com:kfa-ai/hermes-llm-usage.git
+cd hermes-llm-usage
 ./install.sh
 ```
 
@@ -39,140 +48,108 @@ What it does:
 
 1. Copies `desktop-plugins/llm-usage/` → `~/.hermes/desktop-plugins/llm-usage/`
 2. Copies `plugins/llm-usage/` → `~/.hermes/plugins/llm-usage/`
-3. Enables `llm-usage` in `plugins.enabled` (via `hermes plugins enable` when available)
+3. Enables `llm-usage` in `plugins.enabled` when the Hermes CLI is available
 
 Then:
 
-1. **Restart the Hermes dashboard / gateway** so `/api/plugins/llm-usage` mounts  
-   (or restart Desktop if it owns that process)
+1. **Restart dashboard / Desktop-owned `hermes serve`** so `/api/plugins/llm-usage` mounts  
+   (⌘K → Reload desktop plugins alone does **not** remount Python)
 2. In Desktop: **⌘K → Reload desktop plugins**
-3. Look for the floating **LLM Usage** card (top-right) and the status-bar chip
+3. Look for the floating **LLM Usage** card and the status-bar chip
 
-Manual install (same paths):
+Profile-specific install:
 
 ```bash
-mkdir -p ~/.hermes/desktop-plugins ~/.hermes/plugins
-cp -R desktop-plugins/llm-usage ~/.hermes/desktop-plugins/
-cp -R plugins/llm-usage ~/.hermes/plugins/
-hermes plugins enable llm-usage   # if CLI supports it
+HERMES_HOME=/path/to/profile ./install.sh
 ```
 
-Profile-specific: use `$HERMES_HOME` instead of `~/.hermes`.
-
----
-
-## Use
+## Controls
 
 | Control | Action |
-|---|---|
+| --- | --- |
 | Floating card | Drag header · collapse chevron |
 | In-panel **↻** | Force refresh (CLI + API; can take ~15s) |
 | In-panel **✕** | Hide card |
-| In-panel **⚙** | Toggle providers |
-| Bottom-right corner grip | Drag to resize the floating card |
+| In-panel **⚙** | Toggle visible providers |
+| Bottom-right grip | Resize floating card (persisted) |
 | Status-bar **LLM …** chip | Toggle card open/closed |
+| Codex **N reset** pill | Hover for Full reset expiry |
 | ⌘K | Show / Hide / Refresh / Open full page |
-
-Preferences (open/closed, visible providers, and floating size) persist per plugin storage.
-
-The floating card has a small bottom-right resize grip. Drag it to grow or
-shrink the card; size is persisted automatically and is not part of settings.
-
-The HUD uses Hermes' public `placement: 'floating'` plugin surface only. Its
-refresh/close controls live inside the plugin, so it does not require a patched
-Hermes core. The pane contribution id is versioned when necessary to discard
-stale off-screen geometry saved by an older window layout.
-
----
 
 ## Requirements
 
 | Provider | Needs |
-|---|---|
+| --- | --- |
 | Claude Code | `claude` + `tmux` on PATH |
 | Grok | `grok` (xAI CLI) + `tmux` |
 | Codex | `codex` CLI (app-server) |
-| Venice | Admin API key in `~/.hermes/.env` as `VENICE_API_KEY` or `HERMES_CUSTOM_VENICE_API_KEY` |
 | Nous Research | Hermes Portal login (`hermes portal` / `hermes model`) |
+| Venice | **Admin** API key in `$HERMES_HOME/.env` as `VENICE_API_KEY` or `HERMES_CUSTOM_VENICE_API_KEY` |
 
-Inference-only Venice keys can call models but **not** `/billing/balance` (needs Admin).
-
----
+Inference-only Venice keys can call models but **not** `/billing/balance`.
 
 ## Layout
 
 ```text
-desktop-plugins/llm-usage/plugin.js     # Desktop UI (@hermes/plugin-sdk)
+desktop-plugins/llm-usage/plugin.js   # Desktop UI (@hermes/plugin-sdk)
 plugins/llm-usage/
   plugin.yaml
-  __init__.py                           # no agent tools; API-only
+  __init__.py                         # no agent tools; API-only
   dashboard/
     manifest.json
-    plugin_api.py                       # FastAPI /api/plugins/llm-usage/*
+    plugin_api.py                     # FastAPI /api/plugins/llm-usage/*
+tests/                                # stdlib unittest
+install.sh
 ```
 
 Backend routes (when enabled):
 
 - `GET /api/plugins/llm-usage/usage` — multi-provider snapshot (`?force=true` bypasses cache)
-- `GET /api/plugins/llm-usage/health` — CLI/key presence
+- `GET /api/plugins/llm-usage/health` — CLI / key presence
 
-Each quota window carries `used_pct`, `reset_label` (raw provider wording) and
-`resets_at` (epoch seconds, `null` when unparseable). Codex supplies a real
-timestamp; Claude and Grok are scraped text run through `parse_reset_to_epoch`.
+Each quota window carries `used_pct`, `reset_label`, and `resets_at` (epoch seconds).  
+Codex also attaches `capacity.usage_resets` when banked full-limit resets are available.
 
-Nous usage uses Hermes' authenticated `/api/oauth/account` client. The public
-Nous inference OpenAPI documents completions only; it does not document a stable
-usage endpoint, so the plugin does not scrape the billing page or invent a
-`/v1/usage` contract. Results cache ~5 minutes in memory + `~/.hermes/cache/llm-usage.json`. Expiry
-serves the last good snapshot and refreshes behind it, so a poll never waits on
-the provider sweep (~15s).
+Results cache ~5 minutes in memory + `$HERMES_HOME/cache/llm-usage.json`. Expiry serves the last good snapshot and refreshes behind it.
 
 ## Configuration
 
 | Variable | Default | Effect |
-|---|---|---|
-| `HERMES_LLM_USAGE_TTL_SEC` | `300` | Seconds between provider refreshes (min 30). Each sweep spawns tmux, the Claude/Grok CLIs, a Codex app-server and a Venice request — lower values mean real process churn. |
-| `HERMES_LLM_USAGE_WORKDIR` | `$HOME` | cwd for the throwaway CLI sessions. Only needed if the CLIs must run in a directory they've already been trusted in. |
-
----
+| --- | --- | --- |
+| `HERMES_LLM_USAGE_TTL_SEC` | `300` | Seconds between provider refreshes (min 30) |
+| `HERMES_LLM_USAGE_WORKDIR` | `$HOME` | cwd for throwaway CLI sessions (folder trust) |
 
 ## Design rules
 
-- **Account-level** plan windows / balances only — never treat API-key rate caps as “balance”
-- Desktop plugin is uncompiled ESM — **no JSX**; only `@hermes/plugin-sdk` + `react` / `react/jsx-runtime`
-- Theme via live `var(--ui-*)` and `var(--dt-*)` tokens — with two traps:
-  - **`--ui-warning` and `--ui-danger` do not exist.** The usage palette uses the
-    supported `--ui-accent` at watch, blends it toward the active theme's
-    `--dt-destructive` at risk, and uses `--dt-destructive` when maxed. Hermes
-    rewrites those semantic variables as its light/dark/custom theme changes, so
-    the panel and status chip repaint without a plugin reload.
-  - **Tailwind can't see this file.** `apps/desktop/styles.css` does a bare
-    `@import 'tailwindcss'`, so Tailwind 4 only scans `apps/desktop` — never
-    `$HERMES_HOME/desktop-plugins`. Arbitrary classes work *only* if the host
-    happens to use the same value somewhere. Verify against the host's compiled
-    CSS before relying on one, or use an inline `style` — which is what all the
-    palette and gauge geometry does.
-- **Quiet until it matters.** A quota with headroom stays near-monochrome; rows
-  ramp from the theme accent toward its destructive colour as they approach their
-  ceiling, so the row needing attention is found without reading the others. Tick *count* is the primary
-  encoding and colour is secondary, and maxed swaps to a hatch — the panel stays
-  readable with no colour at all.
-- **One time format.** Providers each state resets in their own wording, so the
-  backend resolves all of them to a `resets_at` epoch and the client formats once
-  (`3h`, `23h`, `Mon 7 am`). Unparseable text keeps its raw `reset_label`.
+- **Account-level** plan windows / balances only — never treat API-key rate caps as “balance”.
+- Desktop plugin is uncompiled ESM — **no JSX**; only `@hermes/plugin-sdk` + `react` / `react/jsx-runtime`.
+- Theme via live `var(--ui-*)` and `var(--dt-*)` tokens. Hermes does **not** define `--ui-warning` / `--ui-danger`; attention states use accent → mix toward `--dt-destructive` → `--dt-destructive`.
+- Tailwind does not scan `$HERMES_HOME/desktop-plugins` — prefer inline styles / theme vars.
+- Quiet until it matters: low usage stays near-monochrome; length is primary, colour secondary.
 
----
-
-## Dev loop
+## Development
 
 ```bash
-# edit local install in place, or rsync from this repo:
-./install.sh && # then ⌘K → Reload desktop plugins
-# backend changes need a dashboard restart
+node --check desktop-plugins/llm-usage/plugin.js
+bash -n install.sh
+shellcheck install.sh
+node .github/scripts/check-imports.mjs
+python3 -m unittest discover -s tests -v
+./install.sh   # then restart backend; ⌘K → Reload desktop plugins
 ```
 
----
+See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Troubleshooting
+
+### Reload desktop plugins did nothing after a backend change
+
+Reload only hot-swaps `plugin.js`. Changes under `plugins/llm-usage/dashboard/` need a **dashboard / Desktop `serve` restart**, then a force refresh in the panel.
+
+### Settings → Plugins shows “0 installed” on a remote backend
+
+Known Hermes Desktop issue when the client derives the plugin root from a remote `hermes_home` ([#66899](https://github.com/NousResearch/hermes-agent/issues/66899)). Local sessions are fine; install into the remote profile or run Desktop locally.
 
 ## License
 
-Private for now. All rights reserved until published.
+[MIT](LICENSE)

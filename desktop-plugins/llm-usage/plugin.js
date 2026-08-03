@@ -4,7 +4,8 @@
  * Floating HUD (close via in-panel ✕; reopen from status-bar chip):
  *   Claude Code — Session / All models / Fable
  *   Grok        — Weekly
- *   Codex       — 5-hour / weekly
+ *   Codex       — 5-hour / weekly (+ banked usage-reset pill)
+ *   Nous        — Monthly plan / top-up
  *   Venice      — DIEM epoch / USD balance
  *
  * Account plan windows / balances only — never API-key caps as balances.
@@ -36,6 +37,7 @@ import {
 import { jsx, jsxs } from 'react/jsx-runtime'
 import { useEffect, useRef } from 'react'
 
+const VERSION = '0.3.0'
 const ID = 'llm-usage'
 const ROUTE = '/llm-usage'
 const REST_TIMEOUT_MS = 90_000
@@ -897,6 +899,7 @@ function StatusChip({ rest, onToggle }) {
 export default {
   id: ID,
   name: 'LLM Usage',
+  version: VERSION,
   register(ctx) {
     // Restore last open/closed preference.
     const storedOpen = ctx.storage.get(OPEN_STORAGE_KEY, true)
