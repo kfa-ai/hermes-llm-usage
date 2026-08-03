@@ -48,7 +48,7 @@ cat <<EOF
 Next:
   1. Restart Hermes dashboard/gateway so /api/plugins/llm-usage mounts
   2. Desktop: ⌘K → Reload desktop plugins
-  3. Look for floating "LLM Usage" + status-bar chip
+  3. Look for the "LLM Usage" panel + status-bar chip
 
 Venice: Admin key in \$HERMES_HOME/.env as VENICE_API_KEY or HERMES_CUSTOM_VENICE_API_KEY
 EOF

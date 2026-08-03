@@ -27,26 +27,51 @@ class DesktopPluginCompatibilityTests(unittest.TestCase):
             "Desktop plugin chrome and quota meters must resolve from live theme variables",
         )
 
-    def test_floating_panel_uses_only_public_plugin_surface(self):
+    def test_panel_can_persistently_switch_between_float_and_docked_modes(self):
         source = PLUGIN.read_text(encoding="utf-8")
 
-        self.assertNotIn(
-            "headerActions:",
+        self.assertIn("const MODE_STORAGE_KEY = 'panelMode.v1'", source)
+        self.assertIn("const DEFAULT_PANEL_MODE = 'float'", source)
+        self.assertIn("const $panelMode = atom(DEFAULT_PANEL_MODE)", source)
+        self.assertIn(
+            "const storedMode = ctx.storage.get(MODE_STORAGE_KEY, DEFAULT_PANEL_MODE)",
             source,
-            "standard Hermes floating panes do not render plugin headerActions",
         )
+        self.assertIn("$panelMode.set(storedMode === 'docked' ? 'docked' : DEFAULT_PANEL_MODE)", source)
         self.assertIn("const OPEN_STORAGE_KEY = 'floatingOpen.v2'", source)
         self.assertIn("id: 'pane-v2'", source)
-        self.assertIn("function UsageBoard({ rest, mode, onClose, storage, onResize })", source)
         self.assertIn(
-            "mode: 'float',\n            storage: ctx.storage,",
+            "function UsageBoard({ rest, mode, onClose, onFloat, onModeChange, storage, onResize })",
             source,
         )
+        self.assertIn(
+            "placement: mode === 'float' ? 'floating' : 'right'",
+            source,
+        )
+        self.assertIn("headerActions:", source)
+        self.assertIn("id: 'dock'", source)
+        self.assertIn("label: 'Dock LLM Usage panel'", source)
+        self.assertIn("codicon: 'layout-sidebar-right'", source)
+        self.assertIn("onClick: () => setPanelMode('docked')", source)
+        self.assertNotIn("onDock", source)
+        self.assertIn("const isDocked = mode === 'docked'", source)
+        self.assertIn("onFloat: mode === 'docked' ? () => setPanelMode('float') : undefined", source)
+        # Both mode switches are in-panel icon buttons: the host's floating
+        # header ignores headerActions, so the dock control must render inside
+        # the panel, and the docked panel returns to floating via an icon too.
+        self.assertIn("'aria-label': 'Dock LLM Usage panel'", source)
+        self.assertIn("name: 'layout-sidebar-right'", source)
+        self.assertIn("onModeChange('docked')", source)
+        self.assertIn("'aria-label': 'Float LLM Usage panel'", source)
+        self.assertIn("name: 'multiple-windows'", source)
+        self.assertIn("ctx.storage.set(MODE_STORAGE_KEY, mode)", source)
+        self.assertIn("disposePane()", source)
+        self.assertIn("registerPane()", source)
         self.assertIn("const PROVIDERS_STORAGE_KEY = 'visibleProviders.v1'", source)
         self.assertIn("function SettingsMenu({ storage })", source)
         self.assertIn("Nous Research", source)
         self.assertIn("const SIZE_STORAGE_KEY = 'floatingSize.v1'", source)
-        self.assertIn("width: `${size.width}px`", source)
+        self.assertIn("width: mode === 'float' ? `${size.width}px` : undefined", source)
         self.assertIn("function ResizeHandle({ size, onResize, paneRef })", source)
         self.assertIn("'aria-label': 'Resize LLM Usage window'", source)
         self.assertIn("closest?.('[data-floating-pane]')", source)

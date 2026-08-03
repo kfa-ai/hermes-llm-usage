@@ -1,7 +1,7 @@
 <h1 align="center">hermes-llm-usage</h1>
 
 <p align="center">
-  Floating multi-provider capacity HUD for Hermes Desktop —
+  Dockable multi-provider capacity panel for Hermes Desktop —
   account plan windows and balances, not API-key caps.
 </p>
 
@@ -33,12 +33,13 @@ Successor to the macOS menubar app [`llm-usage-bar`](https://github.com/kfa-ai/l
 
 ## Features
 
-- Floating HUD + status-bar chip + full page + ⌘K commands.
+- Floating or right-docked panel + status-bar chip + full page + ⌘K commands.
 - Multi-provider sections with quiet-until-it-matters meters (theme-live accent → destructive).
-- Provider visibility toggles and a corner resize grip (sizes persist).
+- Provider visibility toggles, persisted floating size, and persisted dock/float mode.
+- In-panel **Dock** and **Float** icon actions switch between floating and right-docked modes.
 - Codex banked **usage-limit resets** as a header pill with expiry on hover.
 - Disk + memory cache (~5 min) so polls never block on a full provider sweep.
-- Stock Hermes only — no core patches; `placement: 'floating'` public surface.
+- Dock/float uses public Desktop pane APIs — no plugin-specific shell changes.
 
 ## Install
 
@@ -59,7 +60,7 @@ Then:
 1. **Restart dashboard / Desktop-owned `hermes serve`** so `/api/plugins/llm-usage` mounts  
    (⌘K → Reload desktop plugins alone does **not** remount Python)
 2. In Desktop: **⌘K → Reload desktop plugins**
-3. Look for the floating **LLM Usage** card and the status-bar chip
+3. Look for the **LLM Usage** panel and the status-bar chip
 
 Profile-specific install:
 
@@ -71,12 +72,13 @@ HERMES_HOME=/path/to/profile ./install.sh
 
 | Control | Action |
 | --- | --- |
-| Floating card | Drag header · collapse chevron |
+| Floating panel | Drag header · collapse chevron · in-panel **Dock** icon |
+| Docked panel | In-panel **Float** icon returns to floating |
 | In-panel **↻** | Force refresh (CLI + API; can take ~15s) |
-| In-panel **✕** | Hide card |
+| In-panel **✕** | Hide active panel |
 | In-panel **⚙** | Toggle visible providers |
-| Bottom-right grip | Resize floating card (persisted) |
-| Status-bar **LLM …** chip | Toggle card open/closed |
+| Bottom-right grip | Resize floating panel (persisted) |
+| Status-bar **LLM …** chip | Toggle active panel open/closed |
 | Codex **N reset** pill | Hover for Full reset expiry |
 | ⌘K | Show / Hide / Refresh / Open full page |
 
@@ -127,6 +129,7 @@ Results cache ~5 minutes in memory + `$HERMES_HOME/cache/llm-usage.json`. Expiry
 
 - **Account-level** plan windows / balances only — never treat API-key rate caps as “balance”.
 - Desktop plugin is uncompiled ESM — **no JSX**; only `@hermes/plugin-sdk` + `react` / `react/jsx-runtime`.
+- Dock/float placement and in-panel controls use public plugin APIs; the existing resize grip remains scoped to the floating card.
 - Theme via live `var(--ui-*)` and `var(--dt-*)` tokens. Hermes does **not** define `--ui-warning` / `--ui-danger`; attention states use accent → mix toward `--dt-destructive` → `--dt-destructive`.
 - Tailwind does not scan `$HERMES_HOME/desktop-plugins` — prefer inline styles / theme vars.
 - Quiet until it matters: low usage stays near-monochrome; length is primary, colour secondary.
