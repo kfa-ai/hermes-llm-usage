@@ -15,6 +15,10 @@
   <a href="https://github.com/kfa-ai/hermes-llm-usage/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/kfa-ai/hermes-llm-usage?style=flat-square&label=release"></a>
 </p>
 
+<p align="center">
+  <img src="assets/llm-usage-panel.png" alt="Floating LLM Usage panel showing plan windows for Claude Code, Grok, Codex, and Nous Research" width="433">
+</p>
+
 At-a-glance plan windows for the providers you actually use inside Hermes:
 
 | Provider | What it shows |
