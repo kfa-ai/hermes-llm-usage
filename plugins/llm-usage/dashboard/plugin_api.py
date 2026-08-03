@@ -493,11 +493,65 @@ def fetch_grok_cli_quota_windows() -> tuple[list[dict], str | None]:
 # ── Codex (OpenAI) ───────────────────────────────────────────────────────────
 
 
-def fetch_codex_app_server_quota() -> tuple[list[dict], str | None]:
-    """Read plan windows via Codex app-server JSON-RPC (account/rateLimits/read)."""
+def parse_codex_reset_credits(result: dict | None) -> dict | None:
+    """Extract banked Codex usage-limit resets from account/rateLimits/read.
+
+    These are the free full-limit resets shown by Codex `/usage` option 2
+    (``rateLimitResetCredits``). Count > 0 only — zero/absent is not capacity.
+    """
+    if not isinstance(result, dict):
+        return None
+    blob = result.get("rateLimitResetCredits")
+    if not isinstance(blob, dict):
+        return None
+    raw_count = blob.get("availableCount")
+    try:
+        count = int(raw_count) if raw_count is not None else 0
+    except (TypeError, ValueError):
+        count = 0
+    if count <= 0:
+        return None
+
+    items: list[dict] = []
+    nearest: float | None = None
+    for credit in blob.get("credits") or []:
+        if not isinstance(credit, dict):
+            continue
+        status = str(credit.get("status") or "").strip().lower() or None
+        if status and status not in ("available", "active", "ready"):
+            # Keep granted-but-spent/expired out of the hover list.
+            if status in ("used", "redeemed", "expired", "consumed"):
+                continue
+        expires_at = credit.get("expiresAt")
+        exp_epoch: float | None = None
+        if isinstance(expires_at, (int, float)):
+            exp_epoch = float(expires_at)
+            if nearest is None or exp_epoch < nearest:
+                nearest = exp_epoch
+        items.append(
+            {
+                "id": credit.get("id"),
+                "title": credit.get("title") or "Full reset",
+                "status": status or "available",
+                "expires_at": exp_epoch,
+                "description": credit.get("description"),
+            }
+        )
+
+    return {
+        "usage_resets": {
+            "available_count": count,
+            "nearest_expires_at": nearest,
+            "items": items,
+        }
+    }
+
+
+def fetch_codex_app_server_quota() -> tuple[list[dict], str | None, dict | None]:
+    """Read plan windows + banked resets via Codex app-server JSON-RPC."""
     codex_bin = _resolve_bin("codex")
     if not codex_bin:
-        return [], "codex CLI not found on PATH"
+        return [], "codex CLI not found on PATH", None
 
     try:
         child = subprocess.Popen(
@@ -508,7 +562,7 @@ def fetch_codex_app_server_quota() -> tuple[list[dict], str | None]:
             text=True,
         )
     except OSError as exc:
-        return [], f"could not start Codex app-server: {exc}"
+        return [], f"could not start Codex app-server: {exc}", None
 
     assert child.stdin is not None and child.stdout is not None
     deadline = time.monotonic() + 20.0
@@ -605,11 +659,12 @@ def fetch_codex_app_server_quota() -> tuple[list[dict], str | None]:
                 }
             )
 
+        capacity = parse_codex_reset_credits(result if isinstance(result, dict) else None)
         if not windows:
-            return [], "Codex returned no rate-limit windows"
-        return windows, None
+            return [], "Codex returned no rate-limit windows", capacity
+        return windows, None, capacity
     except Exception as exc:  # noqa: BLE001
-        return [], str(exc)
+        return [], str(exc), None
     finally:
         try:
             child.kill()
@@ -1142,7 +1197,7 @@ def _collect_providers() -> list[dict]:
     jobs = {
         "anthropic": lambda: (*fetch_claude_cli_quota_windows(), None),
         "grok": lambda: (*fetch_grok_cli_quota_windows(), None),
-        "codex": lambda: (*fetch_codex_app_server_quota(), None),
+        "codex": fetch_codex_app_server_quota,
         "nous": fetch_nous_portal_usage,
         "venice": venice_job,
     }

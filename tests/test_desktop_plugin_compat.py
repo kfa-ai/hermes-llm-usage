@@ -52,6 +52,9 @@ class DesktopPluginCompatibilityTests(unittest.TestCase):
         self.assertIn("closest?.('[data-floating-pane]')", source)
         self.assertIn("floatingPane.style.width", source)
         self.assertNotIn("children: 'Floating window size'", source)
+        self.assertIn("function CodexResetPill", source)
+        self.assertIn("usage_resets", source)
+        self.assertIn("reset", source)
 
     def test_plugin_source_and_installer_parse(self):
         subprocess.run(["node", "--check", str(PLUGIN)], check=True, cwd=ROOT)

@@ -278,6 +278,55 @@ function formatWhen(window_) {
   }
 }
 
+function formatEpochWhen(epoch) {
+  if (typeof epoch !== 'number' || !isFinite(epoch)) return ''
+  try {
+    const when = new Date(epoch * 1000)
+    const date = `${DAY_ABBR[when.getDay()]} ${when.getDate()} ${MONTH_ABBR[when.getMonth()]}`
+    const time = when.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+    return `${date}, ${time}`
+  } catch {
+    return ''
+  }
+}
+
+function codexResetTooltip(resets) {
+  if (!resets) return ''
+  const items = Array.isArray(resets.items) ? resets.items : []
+  if (items.length) {
+    return items
+      .map((item) => {
+        const title = item.title || 'Full reset'
+        const when = formatEpochWhen(item.expires_at)
+        return when ? `${title} · expires ${when}` : title
+      })
+      .join('\n')
+  }
+  const when = formatEpochWhen(resets.nearest_expires_at)
+  const n = resets.available_count || 0
+  if (when) return `${n} usage limit reset${n === 1 ? '' : 's'} · nearest expires ${when}`
+  return `${n} usage limit reset${n === 1 ? '' : 's'} available`
+}
+
+function CodexResetPill({ resets }) {
+  const count = resets?.available_count
+  if (!count || count < 1) return null
+  const label = count === 1 ? '1 reset' : `${count} resets`
+  return jsx(Tip, {
+    label: codexResetTooltip(resets),
+    children: jsx('span', {
+      className:
+        'shrink-0 rounded-full px-1.5 py-px text-[0.5625rem] font-medium tabular-nums tracking-wide',
+      style: {
+        color: 'var(--ui-accent)',
+        background: 'color-mix(in srgb, var(--ui-accent) 14%, transparent)',
+        border: '1px solid color-mix(in srgb, var(--ui-accent) 28%, transparent)',
+      },
+      children: label,
+    }),
+  })
+}
+
 function resetTooltip(window_) {
   const raw = formatReset(window_.reset_label)
   const at = resolveResetEpoch(window_)
@@ -418,6 +467,7 @@ function ProviderSection({ provider }) {
   const windows = orderWindows(provider.id, provider.windows || [])
   const hasData = windows.length > 0
   const err = provider.error
+  const resets = provider?.capacity?.usage_resets
 
   return jsxs('section', {
     className: 'flex flex-col gap-0.5',
@@ -432,8 +482,7 @@ function ProviderSection({ provider }) {
               'text-[0.5625rem] font-semibold uppercase tracking-[0.14em] text-(--ui-text-quaternary)',
             children: provider.name,
           }),
-          // No "unavailable" chip here — at this size it reads as a second
-          // header, and the line below already says what happened.
+          provider.id === 'codex' ? jsx(CodexResetPill, { resets }) : null,
         ],
       }),
       hasData
