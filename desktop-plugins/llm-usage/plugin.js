@@ -41,9 +41,10 @@ const VERSION = '0.3.0'
 const ID = 'llm-usage'
 const ROUTE = '/llm-usage'
 const REST_TIMEOUT_MS = 90_000
-// v2 intentionally opens once after removing the nonstandard shell-header
-// dependency. Later close/reopen choices persist normally under this key.
+// v2 intentionally opens once; later close/reopen choices persist under this key.
 const OPEN_STORAGE_KEY = 'floatingOpen.v2'
+const MODE_STORAGE_KEY = 'panelMode.v1'
+const DEFAULT_PANEL_MODE = 'float'
 const PROVIDERS_STORAGE_KEY = 'visibleProviders.v1'
 const SIZE_STORAGE_KEY = 'floatingSize.v1'
 const QUERY_KEY = [ID, 'usage']
@@ -51,8 +52,9 @@ const DEFAULT_VISIBLE_PROVIDERS = ['anthropic', 'grok', 'codex', 'nous', 'venice
 const DEFAULT_FLOATING_SIZE = { width: 330, height: 384 }
 const SIZE_LIMITS = { width: [280, 560], height: [260, 720] }
 
-/** Shared open-state for the floating card (chip ↔ close button). */
+/** Shared open-state for the active panel (chip ↔ close button). */
 const $floatingOpen = atom(true)
+const $panelMode = atom(DEFAULT_PANEL_MODE)
 const $visibleProviders = atom(DEFAULT_VISIBLE_PROVIDERS)
 const $floatingSize = atom(DEFAULT_FLOATING_SIZE)
 
@@ -684,7 +686,7 @@ function ResizeHandle({ size, onResize, paneRef }) {
   })
 }
 
-function UsageBoard({ rest, mode, onClose, storage, onResize }) {
+function UsageBoard({ rest, mode, onClose, onFloat, onModeChange, storage, onResize }) {
   const { data, isLoading, isFetching, error, refetch, isError } = useUsage(rest)
   useValue($visibleProviders)
   const floatingSize = useValue($floatingSize)
@@ -696,6 +698,7 @@ function UsageBoard({ rest, mode, onClose, storage, onResize }) {
   const showError = (isError || Boolean(data?.error)) && !anyWindows
   const isPage = mode === 'page'
   const isFloat = mode === 'float'
+  const isDocked = mode === 'docked'
 
   const onRefresh = () => {
     haptic('tap')
@@ -709,8 +712,9 @@ function UsageBoard({ rest, mode, onClose, storage, onResize }) {
       isPage ? 'mx-auto w-full max-w-md gap-3 p-5' : 'gap-1.5 p-2'
     ),
     children: [
-      // Controls live inside the plugin so the floating card works on stock
-      // Hermes; no core-only `headerActions` extension is required.
+      // The host's floating-pane header renders only a title and a collapse
+      // chevron and ignores declared header actions, so the dock/float switch
+      // is an in-panel icon button in this control row for both modes.
       jsxs('div', {
         className: 'flex items-center gap-1.5',
         children: [
@@ -732,6 +736,37 @@ function UsageBoard({ rest, mode, onClose, storage, onResize }) {
           }),
           isFetching ? jsx(GlyphSpinner, { className: 'h-3.5 w-3.5 shrink-0' }) : null,
           storage ? jsx(SettingsMenu, { storage }) : null,
+          isFloat && onModeChange
+            ? jsx(Tip, {
+                label: 'Dock panel to the right',
+                children: jsx('button', {
+                  type: 'button',
+                  className: panelBtnClass,
+                  'data-floating-no-drag': '',
+                  'aria-label': 'Dock LLM Usage panel',
+                  onClick: () => {
+                    haptic('tap')
+                    onModeChange('docked')
+                  },
+                  children: jsx(Codicon, { name: 'layout-sidebar-right', size: '0.75rem' }),
+                }),
+              })
+            : null,
+          isDocked && onFloat
+            ? jsx(Tip, {
+                label: 'Float panel',
+                children: jsx('button', {
+                  type: 'button',
+                  className: panelBtnClass,
+                  'aria-label': 'Float LLM Usage panel',
+                  onClick: () => {
+                    haptic('tap')
+                    onFloat()
+                  },
+                  children: jsx(Codicon, { name: 'multiple-windows', size: '0.75rem' }),
+                }),
+              })
+            : null,
           jsx(Tip, {
             label: 'Refresh (CLI + API, can take ~15s)',
             children: isFloat
@@ -762,7 +797,7 @@ function UsageBoard({ rest, mode, onClose, storage, onResize }) {
                   }),
                 }),
           }),
-          isFloat && onClose
+          !isPage && onClose
             ? jsx(Tip, {
                 label: 'Close panel (reopen from status bar)',
                 children: jsx('button', {
@@ -904,6 +939,8 @@ export default {
     // Restore last open/closed preference.
     const storedOpen = ctx.storage.get(OPEN_STORAGE_KEY, true)
     $floatingOpen.set(storedOpen !== false)
+    const storedMode = ctx.storage.get(MODE_STORAGE_KEY, DEFAULT_PANEL_MODE)
+    $panelMode.set(storedMode === 'docked' ? 'docked' : DEFAULT_PANEL_MODE)
     const storedProviders = ctx.storage.get(PROVIDERS_STORAGE_KEY, DEFAULT_VISIBLE_PROVIDERS)
     $visibleProviders.set(
       Array.isArray(storedProviders)
@@ -928,6 +965,7 @@ export default {
     const registerPane = () => {
       if (disposePane) return
       const size = $floatingSize.get()
+      const mode = $panelMode.get()
       disposePane = ctx.register({
         // Versioned once to discard stale off-screen geometry saved for
         // `llm-usage:pane` by an older, wider Hermes window.
@@ -935,17 +973,30 @@ export default {
         area: 'panes',
         title: 'LLM Usage',
         data: {
-          placement: 'floating',
-          anchor: 'top-right',
-          width: `${size.width}px`,
-          height: `${size.height}px`,
+          placement: mode === 'float' ? 'floating' : 'right',
+          anchor: mode === 'float' ? 'top-right' : undefined,
+          width: mode === 'float' ? `${size.width}px` : undefined,
+          height: mode === 'float' ? `${size.height}px` : undefined,
+          headerActions:
+            mode === 'float'
+              ? [
+                  {
+                    id: 'dock',
+                    label: 'Dock LLM Usage panel',
+                    codicon: 'layout-sidebar-right',
+                    onClick: () => setPanelMode('docked'),
+                  },
+                ]
+              : undefined,
         },
         render: () =>
           jsx(UsageBoard, {
             rest: ctx.rest,
-            mode: 'float',
+            mode,
             storage: ctx.storage,
-            onResize: resizeFloating,
+            onResize: mode === 'float' ? resizeFloating : undefined,
+            onModeChange: mode === 'float' ? setPanelMode : undefined,
+            onFloat: mode === 'docked' ? () => setPanelMode('float') : undefined,
             onClose: () => setOpen(false),
           }),
       })
@@ -960,6 +1011,18 @@ export default {
       } else if (disposePane) {
         disposePane()
         disposePane = null
+      }
+    }
+
+    const setPanelMode = (next) => {
+      const mode = next === 'docked' ? 'docked' : DEFAULT_PANEL_MODE
+      if ($panelMode.get() === mode) return
+      $panelMode.set(mode)
+      ctx.storage.set(MODE_STORAGE_KEY, mode)
+      if (disposePane) {
+        disposePane()
+        disposePane = null
+        registerPane()
       }
     }
 
