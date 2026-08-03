@@ -37,7 +37,7 @@ import {
 import { jsx, jsxs } from 'react/jsx-runtime'
 import { useEffect, useRef } from 'react'
 
-const VERSION = '0.3.0'
+const VERSION = '0.4.0'
 const ID = 'llm-usage'
 const ROUTE = '/llm-usage'
 const REST_TIMEOUT_MS = 90_000
