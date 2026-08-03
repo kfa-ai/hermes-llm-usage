@@ -103,11 +103,10 @@ function orderWindows(providerId, windows) {
 /**
  * Palette — quiet until it matters.
  *
- * A quota with headroom needs no attention, so it stays near-monochrome; only
- * rows approaching their ceiling take colour, ramping amber → ember → crimson
- * so the panel reads like a gauge running hot. Literal hex on purpose: the
- * theme defines no `--ui-warning` / `--ui-danger`, so anything keyed to those
- * silently collapses to `--ui-accent` and every row looks identical.
+ * A quota with headroom needs no attention, so it stays near-monochrome. The
+ * attention states ramp from the live accent toward the active theme's
+ * destructive token, so a light, dark, or custom skin repaints the whole gauge
+ * without a plugin reload.
  *
  * Length is the primary encoding and colour is secondary, so the gauge still
  * reads without hue. Maxed additionally swaps to a hatch.
@@ -116,9 +115,12 @@ const WATCH_AT = 60
 const RISK_AT = 85
 const TONES = {
   calm: { fill: 'color-mix(in srgb, var(--ui-text-primary) 62%, transparent)', text: null },
-  watch: { fill: '#d99a2b', text: '#d99a2b' },
-  risk: { fill: '#e2673c', text: '#e2673c' },
-  maxed: { fill: '#d94853', text: '#d94853' },
+  watch: { fill: 'var(--ui-accent)', text: 'var(--ui-accent)' },
+  risk: {
+    fill: 'color-mix(in srgb, var(--ui-accent) 40%, var(--dt-destructive))',
+    text: 'color-mix(in srgb, var(--ui-accent) 40%, var(--dt-destructive))',
+  },
+  maxed: { fill: 'var(--dt-destructive)', text: 'var(--dt-destructive)' },
 }
 // Kept well below the calm fill so a low reading still reads as filled.
 const BAR_TRACK = 'color-mix(in srgb, var(--ui-text-primary) 12%, transparent)'

@@ -140,13 +140,12 @@ the provider sweep (~15s).
 
 - **Account-level** plan windows / balances only — never treat API-key rate caps as “balance”
 - Desktop plugin is uncompiled ESM — **no JSX**; only `@hermes/plugin-sdk` + `react` / `react/jsx-runtime`
-- Theme via `var(--ui-*)` tokens — with two traps:
-  - **`--ui-warning` and `--ui-danger` do not exist.** Hermes never defines them; the
-    host inlines its own fallbacks (`text-(--ui-danger,#f87171)`) and its real
-    destructive token is `--dt-destructive`. Anything keyed to the missing pair
-    silently collapses to `--ui-accent`, which is how every quota bar — 4%, 89%,
-    and maxed alike — ended up the same blue. State colour lives in `TONES` in
-    `plugin.js` as literal hex.
+- Theme via live `var(--ui-*)` and `var(--dt-*)` tokens — with two traps:
+  - **`--ui-warning` and `--ui-danger` do not exist.** The usage palette uses the
+    supported `--ui-accent` at watch, blends it toward the active theme's
+    `--dt-destructive` at risk, and uses `--dt-destructive` when maxed. Hermes
+    rewrites those semantic variables as its light/dark/custom theme changes, so
+    the panel and status chip repaint without a plugin reload.
   - **Tailwind can't see this file.** `apps/desktop/styles.css` does a bare
     `@import 'tailwindcss'`, so Tailwind 4 only scans `apps/desktop` — never
     `$HERMES_HOME/desktop-plugins`. Arbitrary classes work *only* if the host
@@ -154,8 +153,8 @@ the provider sweep (~15s).
     CSS before relying on one, or use an inline `style` — which is what all the
     palette and gauge geometry does.
 - **Quiet until it matters.** A quota with headroom stays near-monochrome; rows
-  ramp amber → ember → crimson as they approach their ceiling, so the row needing
-  attention is found without reading the others. Tick *count* is the primary
+  ramp from the theme accent toward its destructive colour as they approach their
+  ceiling, so the row needing attention is found without reading the others. Tick *count* is the primary
   encoding and colour is secondary, and maxed swaps to a hatch — the panel stays
   readable with no colour at all.
 - **One time format.** Providers each state resets in their own wording, so the
