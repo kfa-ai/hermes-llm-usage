@@ -1,5 +1,5 @@
 name: llm-usage
-version: 0.4.1
+version: 0.5.0
 description: >-
   LLM plan windows / capacity for Hermes Desktop
   (Claude Code, Grok, Codex, Nous Research, Venice). Account-level only.

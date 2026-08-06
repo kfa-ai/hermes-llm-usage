@@ -1165,6 +1165,64 @@ def _provider_status(windows: list[dict], error: str | None) -> str:
     return "unknown"
 
 
+# Conservative auth-failure markers. Only strong, stable wording maps to
+# ``auth_error``; ambiguous errors (CLI UI drift, network, timeouts) stay
+# ``unknown`` so the dot never cries wolf on a transient blip.
+_AUTH_ERROR_HINTS = (
+    "not logged in",
+    "rejected this key",
+    "admin key",
+    "authentication",
+    "unauthorized",
+    "not signed in",
+    "login",
+    "token",
+    "expired",
+    "401",
+    "403",
+)
+
+
+def _looks_like_auth_error(error: str | None) -> bool:
+    if not error:
+        return False
+    low = error.lower()
+    return any(hint in low for hint in _AUTH_ERROR_HINTS)
+
+
+def _availability(status: str, error: str | None) -> str:
+    """Classify provider connection health for the availability dot.
+
+    ``verified``  — a provider-specific authenticated read succeeded recently.
+    ``auth_error`` — a recognized credential/token failure (dropped OAuth).
+    ``exhausted`` — quota exhausted but the account may still be usable
+                   (e.g. Nous top-up balance remaining).
+    ``depleted``  — exhausted with no remaining balance (nothing left to use).
+    ``unknown``   — ambiguous error, no verification, or unsupported surface.
+    """
+    if status == "error":
+        return "auth_error" if _looks_like_auth_error(error) else "unknown"
+    if status == "exhausted":
+        return "exhausted"
+    if status == "ok":
+        return "verified"
+    return "unknown"
+
+
+def _nous_availability(provider: dict) -> dict:
+    """Refine the Nous dot: exhausted monthly plan is still usable while a
+    top-up balance remains, and truly out only once that balance is gone."""
+    if provider.get("id") != "nous" or provider.get("availability") != "exhausted":
+        return provider
+    topup_remaining = (provider.get("capacity") or {}).get("topup_remaining_usd")
+    if topup_remaining is None:
+        # No top-up reported — fall back to the raw exhausted signal.
+        return provider
+    if float(topup_remaining or 0) <= 0:
+        provider["availability"] = "depleted"
+    return provider
+
+
 def _provider(
     *,
     id_: str,
@@ -1175,10 +1233,13 @@ def _provider(
     note: str | None = None,
     capacity: dict | None = None,
 ) -> dict:
+    status = _provider_status(windows, error)
     return {
         "id": id_,
         "name": name,
-        "status": _provider_status(windows, error),
+        "status": status,
+        "availability": _availability(status, error),
+        "checked_at": datetime.now(timezone.utc).isoformat(),
         "confidence": "actual" if windows else "unavailable",
         "source": source,
         "windows": windows,
@@ -1229,7 +1290,9 @@ def _collect_providers() -> list[dict]:
         pack("anthropic", "Claude Code", "Claude Code CLI /usage", "Session · all models · Fable"),
         pack("grok", "Grok", "Grok CLI /usage", "Weekly plan window"),
         pack("codex", "Codex", "Codex app-server rate limits", "5-hour · weekly"),
-        pack("nous", "Nous Research", "Hermes Portal account API", "Monthly subscription · top-up"),
+        _nous_availability(
+            pack("nous", "Nous Research", "Hermes Portal account API", "Monthly subscription · top-up")
+        ),
         pack("venice", "Venice", "Venice billing /balance", "Account balance · DIEM epoch"),
     ]
 
@@ -1293,7 +1356,7 @@ def _snapshot(force: bool = False) -> dict:
             and (now - _cache_at) < _CACHE_TTL_SEC
             and _providers_look_complete(_cache)
         ):
-            return {**_cache, "cached": True}
+            return {**_cache, "cached": True, "stale": False}
 
         if not force:
             # Expired or cold: answer immediately from the last good snapshot and
