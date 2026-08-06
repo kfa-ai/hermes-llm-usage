@@ -84,6 +84,34 @@ class DesktopPluginCompatibilityTests(unittest.TestCase):
         self.assertIn("usage_resets", source)
         self.assertIn("reset", source)
 
+    def test_provider_headers_show_connection_health_dot(self):
+        source = PLUGIN.read_text(encoding="utf-8")
+
+        # Dot beside every provider header, driven by live theme tokens.
+        # StatusDot's `good` tone maps to bg-primary (near-white in dark skins),
+        # so verified must use --ui-green directly.
+        self.assertIn("function AvailabilityDot", source)
+        self.assertIn("jsx(AvailabilityDot, { provider, stale })", source)
+        self.assertIn("var(--ui-green)", source)
+        self.assertIn("var(--ui-red)", source)
+        self.assertIn("var(--ui-orange)", source)
+        self.assertIn("depleted: 'var(--ui-red)'", source)
+        self.assertIn("balance depleted — top up or renew", source)
+        self.assertIn("AVAILABILITY_FILL", source)
+        self.assertIn("function availabilityFill(provider, stale)", source)
+        # Stale snapshots must never render as a confident green.
+        self.assertIn("if (stale) return AVAILABILITY_FILL.unknown", source)
+        # Tooltip says what was verified, not a promise of inference availability.
+        self.assertIn("connection verified", source)
+        self.assertIn("auth failure", source)
+        # The backend classification values the fill maps from.
+        self.assertIn("provider?.availability", source)
+        self.assertIn("provider?.checked_at", source)
+        # Do not regress to StatusDot's broken good→primary mapping.
+        self.assertNotIn("StatusDot,", source)
+        self.assertNotIn("jsx(StatusDot", source)
+        self.assertNotIn("tone: availabilityTone", source)
+
     def test_plugin_source_and_installer_parse(self):
         subprocess.run(["node", "--check", str(PLUGIN)], check=True, cwd=ROOT)
         subprocess.run(["bash", "-n", str(INSTALLER)], check=True, cwd=ROOT)

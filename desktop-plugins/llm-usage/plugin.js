@@ -37,7 +37,7 @@ import {
 import { jsx, jsxs } from 'react/jsx-runtime'
 import { useEffect, useRef } from 'react'
 
-const VERSION = '0.4.1'
+const VERSION = '0.5.0'
 const ID = 'llm-usage'
 const ROUTE = '/llm-usage'
 const REST_TIMEOUT_MS = 90_000
@@ -467,7 +467,61 @@ function WindowRow({ window: w }) {
   })
 }
 
-function ProviderSection({ provider }) {
+/**
+ * Connection-health dot beside each provider header.
+ *
+ * The dot reports what the backend actually verified (a provider-specific
+ * authenticated read succeeded recently) — it is NOT a promise that every
+ * model/request will infer successfully. Green = recent verification,
+ * red = recognized auth/token failure (e.g. dropped OAuth), amber = quota
+ * exhausted, gray = unknown/stale. Stale snapshots never render as green.
+ *
+ * Colours use live theme tokens (not StatusDot). StatusDot's `good` tone maps
+ * to `bg-primary`, which is near-white in dark skins — verified would look
+ * gray/white instead of green.
+ */
+const AVAILABILITY_FILL = {
+  verified: 'var(--ui-green)',
+  auth_error: 'var(--ui-red)',
+  exhausted: 'var(--ui-orange)',
+  depleted: 'var(--ui-red)',
+  unknown: 'color-mix(in srgb, var(--ui-text-primary) 35%, transparent)',
+}
+
+function availabilityFill(provider, stale) {
+  if (stale) return AVAILABILITY_FILL.unknown
+  return AVAILABILITY_FILL[provider?.availability] || AVAILABILITY_FILL.unknown
+}
+
+function availabilityLabel(provider, stale) {
+  const name = provider?.name || 'Provider'
+  const at = provider?.checked_at
+    ? ` · ${new Date(provider.checked_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+    : ''
+  if (stale) return `${name} · connection check is stale`
+  switch (provider?.availability) {
+    case 'verified':
+      return `${name} · connection verified${at}`
+    case 'auth_error':
+      return `${name} · auth failure — re-authenticate${at}`
+    case 'exhausted':
+      return `${name} · quota exhausted`
+    case 'depleted':
+      return `${name} · balance depleted — top up or renew`
+    default:
+      return `${name} · connection unknown`
+  }
+}
+
+function AvailabilityDot({ provider, stale }) {
+  return jsx('span', {
+    'aria-hidden': 'true',
+    className: 'inline-block size-1.5 shrink-0 rounded-full',
+    style: { background: availabilityFill(provider, stale) },
+  })
+}
+
+function ProviderSection({ provider, stale }) {
   const windows = orderWindows(provider.id, provider.windows || [])
   const hasData = windows.length > 0
   const err = provider.error
@@ -479,12 +533,18 @@ function ProviderSection({ provider }) {
       jsxs('div', {
         className: 'flex items-baseline justify-between gap-2 pt-0.5',
         children: [
-          jsx('h3', {
-            // Smaller and more widely tracked than the rows it labels, so
-            // headers recede and the quota rows carry the panel.
-            className:
-              'text-[0.5625rem] font-semibold uppercase tracking-[0.14em] text-(--ui-text-quaternary)',
-            children: provider.name,
+          jsx(Tip, {
+            label: availabilityLabel(provider, stale),
+            children: jsx('h3', {
+              // Smaller and more widely tracked than the rows it labels, so
+              // headers recede and the quota rows carry the panel.
+              className:
+                'inline-flex items-center gap-1 text-[0.5625rem] font-semibold uppercase tracking-[0.14em] text-(--ui-text-quaternary)',
+              children: [
+                jsx(AvailabilityDot, { provider, stale }),
+                provider.name,
+              ],
+            }),
           }),
           provider.id === 'codex' ? jsx(CodexResetPill, { resets }) : null,
         ],
@@ -858,7 +918,7 @@ function UsageBoard({ rest, mode, onClose, onFloat, onModeChange, storage, onRes
             children: jsx('div', {
               className: 'flex flex-col gap-2.5 pr-0.5',
               children: providers.map((p) =>
-                jsx(ProviderSection, { provider: p }, p.id)
+                jsx(ProviderSection, { provider: p, stale: Boolean(data?.stale) }, p.id)
               ),
             }),
           })
