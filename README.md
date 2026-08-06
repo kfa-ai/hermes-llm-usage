@@ -16,7 +16,7 @@
 </p>
 
 <p align="center">
-  <img src="assets/llm-usage-panel.png" alt="Floating LLM Usage panel showing plan windows for Claude Code, Grok, Codex, and Nous Research" width="433">
+  <img src="assets/llm-usage-panel.png" alt="Floating LLM Usage panel showing provider connection-health dots and plan windows for Claude Code, Grok, Codex, and Nous Research" width="433">
 </p>
 
 At-a-glance plan windows for the providers you actually use inside Hermes:
